@@ -1,7 +1,8 @@
+// SARWAR-MD
 const axios = require('axios');
-const config = require('../config')
-const {cmd , commands} = require('../command')
-const googleTTS = require('google-tts-api')
+const config = require('../config');
+const { cmd, commands } = require('../command');
+const googleTTS = require('google-tts-api');
 
 cmd({
     pattern: "tts",
@@ -18,7 +19,7 @@ if(!q) return reply("Need some text.")
   slow: false,
   host: 'https://translate.google.com',
 })
-await conn.sendMessage(from, { audio: { url: url }, mimetype: 'audio/mpeg', ptt: true }, { quoted: mek })
+await conn.sendMessage(from, { audio: { url: url }, mimetype: 'audio/mpeg', ptt: false }, { quoted: mek })
     }catch(a){
 reply(`${a}`)
 }
