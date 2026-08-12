@@ -25,7 +25,7 @@ cmd({
     const start = Date.now();
 
     const reactionEmojis = ['🔥','⚡','🚀','💨','🎯','🎉','🌟','💥','🕐','🔹'];
-    const textEmojis = ['💎','🏆','⚡️','🚀','🎶','🌠','🌀','🔱','🛡️','✨'];
+    const textEmojis = ['💎','🏆','⚡️','🚀','🎶','🌠','🌀','🚩','🛡️','✨'];
 
     let reactionEmoji = reactionEmojis[Math.floor(Math.random() * reactionEmojis.length)];
     let textEmoji = textEmojis[Math.floor(Math.random() * textEmojis.length)];
