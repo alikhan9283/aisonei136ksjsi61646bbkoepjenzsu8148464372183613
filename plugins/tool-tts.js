@@ -4,7 +4,7 @@ const {cmd , commands} = require('../command')
 const googleTTS = require('google-tts-api')
 
 cmd({
-    pattern: "tts",
+    pattern: "tts2",
     desc: "download songs",
     category: "download",
     react: "👧",
