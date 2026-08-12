@@ -18,7 +18,7 @@ async (conn, mek, m, { from, sender, reply }) => {
         const startTime = Date.now();
 
         // URLs — replace with your own hosted image/video note if desired
-        const imageUrl = config.MENU_IMAGE_URL || "https://i.ibb.co/Z1K68jXR/upload-1786444357631.png";
+        const imageUrl = config.MENU_IMAGE_URL || "https://i.ibb.co/Zzv1Tz7K/SARWAR-MD.jpg";
         const videoNoteUrl = "https://files.catbox.moe/t9dj8o.mp4";
 
         const ping = Date.now() - startTime;
