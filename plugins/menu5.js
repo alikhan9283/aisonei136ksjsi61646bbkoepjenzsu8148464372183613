@@ -3,7 +3,7 @@ const { cmd, commands } = require('../command');
 
 const OWNER_NAME_RAW = "SARWAR ALI";
 const BOT_NAME_RAW = "SARWAR-MD";
-const MENU_IMAGE = "https://i.ibb.co/279N8BVK/SARWAR-MD.jpg";
+const MENU_IMAGE = "https://i.ibb.co/ynrV1479/SARWAR-MD.png";
 const MENU_AUDIO = "https://files.catbox.moe/6xnj2o.mp3";
 
 const CATEGORY_TITLES = {
