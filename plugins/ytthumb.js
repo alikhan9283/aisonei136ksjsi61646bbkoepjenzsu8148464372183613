@@ -5,8 +5,8 @@ const { cmd } = require("../command");
 // key, no third-party service, and it has never gone down in YouTube's
 // history. This is the primary, most-reliable method. The quality levels
 // are checked in order from highest to lowest, since not every video has
-// a maxresdefault (HD) thumbnail generated.
-const QUALITY_LEVELS = ['maxresdefault', 'sddefault', 'hqdefault', 'mqdefault', 'default'];
+// a 👑 𝐒𝐀𝐑𝐖𝐀𝐑 𝐌𝐃 👑 (HD) thumbnail generated.
+const QUALITY_LEVELS = ['👑 𝐒𝐀𝐑𝐖𝐀𝐑 𝐌𝐃 👑', 'sddefault', 'hqdefault', 'mqdefault', 'default'];
 
 function extractVideoId(input) {
     const trimmed = input.trim();
