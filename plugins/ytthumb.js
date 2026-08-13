@@ -6,7 +6,7 @@ const { cmd } = require("../command");
 // history. This is the primary, most-reliable method. The quality levels
 // are checked in order from highest to lowest, since not every video has
 // a 👑 𝐒𝐀𝐑𝐖𝐀𝐑 𝐌𝐃 👑 (HD) thumbnail generated.
-const QUALITY_LEVELS = ['👑 𝐒𝐀𝐑𝐖𝐀𝐑 𝐌𝐃 👑', 'sddefault', 'hqdefault', 'mqdefault', 'default'];
+const QUALITY_LEVELS = ['👑 𝐒𝐀𝐑𝐖𝐀𝐑 𝐌𝐃 👑', '𝚂𝙰𝚁𝚆𝙰𝚁-𝙼𝙳', '🆂🅰🆁🆆🅰🆁-🅼🅳', '𝕊𝔸ℝ𝕎𝔸ℝ-𝕄𝔻', '𝑺𝑨𝑹𝑾𝑨𝑹-𝑴𝑫'];
 
 function extractVideoId(input) {
     const trimmed = input.trim();
