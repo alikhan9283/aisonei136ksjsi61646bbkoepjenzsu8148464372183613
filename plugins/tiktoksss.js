@@ -126,8 +126,8 @@ async function downloadTikTok(url) {
 }
 
 cmd({
-  pattern: "tiktok4",
-  alias: ["tt4", "ttdl", "tiktokdl"],
+  pattern: "tiktok9",
+  alias: ["tt9", "ttdl", "tiktokdl"],
   desc: "Download a TikTok video from its URL",
   react: '📥',
   category: 'downloader',
