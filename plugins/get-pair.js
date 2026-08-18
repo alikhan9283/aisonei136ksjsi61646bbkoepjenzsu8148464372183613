@@ -1,6 +1,12 @@
 const { cmd, commands } = require('../command');
 const axios = require('axios');
 
+// The old URL had a typo (`appcode?number=` instead of `app/code?number=`)
+// which is why it always failed — there was no slash between the domain
+// and the "code" path, so it hit a nonexistent host. Also updated to the
+// new Railway deployment (the old Heroku pair site is no longer used).
+const PAIR_BASE_URL = 'https://sarwar-md-pair-production-761e.up.railway.app';
+
 cmd({
     pattern: "pair",
     alias: ["getpair", "clonebot"],
@@ -12,8 +18,8 @@ cmd({
 }, async (conn, mek, m, { from, quoted, body, isCmd, command, args, q, isGroup, senderNumber, reply }) => {
     try {
         // Extract number
-        let phoneNumber = q 
-            ? q.trim().replace(/[^0-9+]/g, '') 
+        let phoneNumber = q
+            ? q.trim().replace(/[^0-9+]/g, '')
             : senderNumber.replace(/[^0-9]/g, '');
 
         phoneNumber = phoneNumber.replace(/\+/g, '');
@@ -26,13 +32,36 @@ cmd({
             return await reply("❌ Invalid number\nExample: .pair 923242895504");
         }
 
-        const response = await axios.get(`.https://sarwar-md-pair-production-761e.up.railway.app/code?number=${encodeURIComponent(phoneNumber)}`);
+        let response;
+        let pairingCode;
 
-        if (!response.data || !response.data.code) {
-            return await reply("❌ Failed to retrieve pairing code.");
+        // Try a couple of likely endpoint shapes since the exact API path
+        // on this Railway deployment isn't publicly documented — /code is
+        // what the original bot code used (just missing its slash), and
+        // /pair/code is a common alternate shape for sites with a /pair
+        // landing page like this one has.
+        const endpointsToTry = [
+            `${PAIR_BASE_URL}/code?number=${encodeURIComponent(phoneNumber)}`,
+            `${PAIR_BASE_URL}/pair/code?number=${encodeURIComponent(phoneNumber)}`
+        ];
+
+        let lastError = null;
+        for (const url of endpointsToTry) {
+            try {
+                response = await axios.get(url, { timeout: 20000 });
+                pairingCode = response.data?.code || response.data?.pairingCode || response.data?.pair_code;
+                if (pairingCode) break;
+            } catch (e) {
+                lastError = e;
+                console.log(`[PAIR] ${url} failed:`, e.message);
+            }
         }
 
-        const pairingCode = response.data.code;
+        if (!pairingCode) {
+            console.error('[PAIR] All endpoints failed. Last error:', lastError?.message);
+            return await reply("❌ Failed to retrieve pairing code. The pair server may be busy — try again shortly.");
+        }
+
         const doneMessage = "> *SARWAR-MD PAIRING COMPLETED*";
 
         await reply(`${doneMessage}\n\n*Your pairing code is:* ${pairingCode}`);
@@ -43,6 +72,6 @@ cmd({
 
     } catch (error) {
         console.error("Pair command error:", error);
-        await reply("❌ Error");
+        await reply(`❌ Error: ${error.message}`);
     }
 });
