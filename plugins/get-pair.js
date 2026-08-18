@@ -26,7 +26,7 @@ cmd({
             return await reply("❌ Invalid number\nExample: .pair 923242895504");
         }
 
-        const response = await axios.get(`https://sarwar-md-pair-production-9bdf.up.railway.appcode?number=${encodeURIComponent(phoneNumber)}`);
+        const response = await axios.get(`.https://sarwar-md-pair-production-761e.up.railway.app/code?number=${encodeURIComponent(phoneNumber)}`);
 
         if (!response.data || !response.data.code) {
             return await reply("❌ Failed to retrieve pairing code.");
