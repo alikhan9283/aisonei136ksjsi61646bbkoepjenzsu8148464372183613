@@ -4,54 +4,52 @@ const yts = require('yt-search');
 
 // Extract YouTube video ID from various URL formats
 function extractVideoId(url) {
-  const patterns = [
+  const match = url.match(
     /(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/embed\/|youtube\.com\/shorts\/)([a-zA-Z0-9_-]{11})/
-  ];
-  for (const pattern of patterns) {
-    const match = url.match(pattern);
-    if (match) return match[1];
-  }
-  return null;
+  );
+  return match ? match[1] : null;
 }
 
 function isYoutubeLink(text) {
   return /(youtube\.com|youtu\.be)/.test(text);
 }
 
-// Single API - adeel-xtech (only source, no fallback)
+// Single API - adeel-xtech only
 async function downloadAudio(videoUrl) {
-  try {
-    const apiUrl = `https://adeel-xtech-apis.vercel.app/api/ytmp3?url=${encodeURIComponent(videoUrl)}`;
-    const { data } = await axios.get(apiUrl, { timeout: 20000 });
+  const apiUrl = `https://adeel-xtech-apis.vercel.app/api/ytmp3?url=${encodeURIComponent(videoUrl)}`;
 
-    if (!data?.status || !data?.result?.audio_download) {
-      return null;
-    }
+  // Step 1: call the API to get download link + meta
+  const { data } = await axios.get(apiUrl, { timeout: 25000 });
 
-    const meta = {
-      title: data.result.title,
-      duration: data.result.duration,
-      quality: data.result.quality,
-      thumbnail: data.result.thumbnail,
-      creator: data.creator
-    };
-
-    // Download actual audio buffer from the resolved link
-    const audioRes = await axios.get(data.result.audio_download, {
-      responseType: 'arraybuffer',
-      timeout: 60000
-    });
-
-    if (!audioRes?.data) return null;
-
-    return {
-      buffer: Buffer.from(audioRes.data),
-      meta
-    };
-  } catch (err) {
-    console.log(`[downloadAudio] adeel-xtech failed: ${err.message}`);
-    return null;
+  if (!data?.status || !data?.result?.audio_download) {
+    throw new Error('API_NO_RESULT: ' + JSON.stringify(data));
   }
+
+  const meta = {
+    title: data.result.title,
+    duration: data.result.duration,
+    quality: data.result.quality,
+    thumbnail: data.result.thumbnail,
+    creator: data.creator
+  };
+
+  // Step 2: download the actual audio buffer
+  const audioRes = await axios.get(data.result.audio_download, {
+    responseType: 'arraybuffer',
+    timeout: 90000,
+    headers: {
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+    }
+  });
+
+  if (!audioRes?.data || audioRes.data.length === 0) {
+    throw new Error('AUDIO_BUFFER_EMPTY');
+  }
+
+  return {
+    buffer: Buffer.from(audioRes.data),
+    meta
+  };
 }
 
 const commands = ["play", "song", "mp3"];
@@ -76,16 +74,11 @@ commands.forEach((pattern) => {
         if (isYoutubeLink(q)) {
           const videoId = extractVideoId(q);
           try {
-            const searchResult = videoId
-              ? await yts({ videoId })
-              : (await yts(q)).all[0];
-            vid = searchResult;
+            vid = videoId ? await yts({ videoId }) : (await yts(q)).all[0];
           } catch (e) {
             vid = null;
           }
-
           if (!vid) {
-            // Fallback minimal vid object if yts lookup fails
             vid = {
               title: "Unknown Title",
               url: q,
@@ -113,20 +106,15 @@ commands.forEach((pattern) => {
           `🔗 *Link:* ${vid.url}\n\n` +
           `> Downloading audio, please wait...`;
 
-        const thumb = vid.thumbnail;
-        if (thumb) {
-          await conn.sendMessage(
-            from,
-            { image: { url: thumb }, caption },
-            { quoted: mek }
-          );
+        if (vid.thumbnail) {
+          await conn.sendMessage(from, { image: { url: vid.thumbnail }, caption }, { quoted: mek });
         } else {
           await reply(caption);
         }
 
-        const result = await downloadAudio(vid.url);
+        try {
+          const result = await downloadAudio(vid.url);
 
-        if (result?.buffer) {
           await conn.sendMessage(
             from,
             {
@@ -138,10 +126,13 @@ commands.forEach((pattern) => {
             { quoted: mek }
           );
           await conn.sendMessage(from, { react: { text: "✅", key: mek.key } });
-        } else {
+
+        } catch (downloadErr) {
+          console.log(`[${pattern}] downloadAudio error:`, downloadErr.message);
           await conn.sendMessage(from, { react: { text: "❌", key: mek.key } });
-          await reply("❌ Failed to download audio. All sources are currently unavailable, please try again later.");
+          await reply(`❌ Failed to download audio.\n\n*Reason:* ${downloadErr.message}`);
         }
+
       } catch (error) {
         console.log(`[${pattern}] Error:`, error);
         await conn.sendMessage(from, { react: { text: "❌", key: mek.key } }).catch(() => {});
