@@ -13,6 +13,34 @@ function isYoutubeLink(text) {
   return /(youtube\.com|youtu\.be)/.test(text);
 }
 
+// Pull the real target file URL out of Adeel's proxy stream link (?target=...)
+function extractTargetUrl(streamUrl) {
+  try {
+    const u = new URL(streamUrl);
+    const target = u.searchParams.get('target');
+    return target ? decodeURIComponent(target) : null;
+  } catch (e) {
+    return null;
+  }
+}
+
+async function fetchBuffer(url) {
+  const res = await axios.get(url, {
+    responseType: 'arraybuffer',
+    timeout: 90000,
+    maxRedirects: 10,
+    validateStatus: (status) => status >= 200 && status < 400,
+    headers: {
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36',
+      'Accept': '*/*'
+    }
+  });
+  if (!res?.data || res.data.length === 0) {
+    throw new Error('EMPTY_BUFFER');
+  }
+  return Buffer.from(res.data);
+}
+
 // Single API - adeel-xtech only
 async function downloadAudio(videoUrl) {
   const apiUrl = `https://adeel-xtech-apis.vercel.app/api/ytmp3?url=${encodeURIComponent(videoUrl)}`;
@@ -32,40 +60,23 @@ async function downloadAudio(videoUrl) {
     creator: data.creator
   };
 
-  let streamUrl = data.result.audio_download;
+  const proxyStreamUrl = data.result.audio_download;
+  const directTargetUrl = extractTargetUrl(proxyStreamUrl);
 
-  // Step 2: download actual audio, try as-is first, then force https as fallback
-  const attempts = [streamUrl];
-  if (streamUrl.startsWith('http://')) {
-    attempts.push(streamUrl.replace('http://', 'https://'));
+  // Try the direct source file first (bypasses Adeel's proxy, avoids their 500s),
+  // then fall back to the proxy URL itself if direct fails.
+  const attempts = [];
+  if (directTargetUrl) attempts.push(directTargetUrl);
+  attempts.push(proxyStreamUrl);
+  if (proxyStreamUrl.startsWith('http://')) {
+    attempts.push(proxyStreamUrl.replace('http://', 'https://'));
   }
 
   let lastErr;
   for (const url of attempts) {
     try {
-      const audioRes = await axios.get(url, {
-        responseType: 'arraybuffer',
-        timeout: 90000,
-        maxRedirects: 10,
-        validateStatus: (status) => status < 500,
-        headers: {
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36',
-          'Accept': '*/*'
-        }
-      });
-
-      if (audioRes.status >= 400) {
-        lastErr = new Error(`Stream returned ${audioRes.status}`);
-        continue;
-      }
-
-      if (!audioRes?.data || audioRes.data.length === 0) {
-        lastErr = new Error('AUDIO_BUFFER_EMPTY');
-        continue;
-      }
-
-      return { buffer: Buffer.from(audioRes.data), meta };
-
+      const buffer = await fetchBuffer(url);
+      return { buffer, meta };
     } catch (err) {
       lastErr = err;
       continue;
@@ -89,7 +100,7 @@ commands.forEach((pattern) => {
     async (conn, mek, m, { from, q, reply }) => {
       try {
         if (!q || !q.trim()) {
-          return reply(`❓ Please provide a song name or YouTube link.\nExample: *.${pattern} judaai maar deti hai*`);
+          return reply(`❓ Please provide a song name or YouTube link.\nExample: *.${pattern} pal pal*`);
         }
 
         let vid;
@@ -125,9 +136,9 @@ commands.forEach((pattern) => {
           `🎵 *${vid.title}*\n\n` +
           `👤 *Channel:* ${vid.author?.name || "Unknown"}\n` +
           `⏱️ *Duration:* ${vid.timestamp || "N/A"}\n` +
-          `👁️ *Views:* ${vid.views ? vid.views.toLocaleString() : "N/A"}\n` +
-          `🔗 *Link:* ${vid.url}\n\n` +
-          `> Downloading audio, please wait...`;
+          `👁️ *Views:* ${vid.views ? vid.views.toLocaleString() : "N/A"}\n\n` +
+          `> Downloading audio, please wait...\n\n` +
+          `_Powered by SARWAR MD_`;
 
         if (vid.thumbnail) {
           await conn.sendMessage(from, { image: { url: vid.thumbnail }, caption }, { quoted: mek });
@@ -153,7 +164,7 @@ commands.forEach((pattern) => {
         } catch (downloadErr) {
           console.log(`[${pattern}] downloadAudio error:`, downloadErr.message);
           await conn.sendMessage(from, { react: { text: "❌", key: mek.key } });
-          await reply(`❌ Failed to download audio.\n\n*Reason:* ${downloadErr.message}`);
+          await reply(`❌ Failed to download audio.\n\n*Reason:* ${downloadErr.message}\n\n_Please try again in a moment._`);
         }
 
       } catch (error) {
