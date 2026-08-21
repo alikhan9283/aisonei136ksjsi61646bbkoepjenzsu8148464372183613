@@ -13,15 +13,8 @@ function isYoutubeLink(text) {
   return /(youtube\.com|youtu\.be)/.test(text);
 }
 
-// Pull the real target file URL out of Adeel's proxy stream link (?target=...)
-function extractTargetUrl(streamUrl) {
-  try {
-    const u = new URL(streamUrl);
-    const target = u.searchParams.get('target');
-    return target ? decodeURIComponent(target) : null;
-  } catch (e) {
-    return null;
-  }
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 async function fetchBuffer(url) {
@@ -29,7 +22,6 @@ async function fetchBuffer(url) {
     responseType: 'arraybuffer',
     timeout: 90000,
     maxRedirects: 10,
-    validateStatus: (status) => status >= 200 && status < 400,
     headers: {
       'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36',
       'Accept': '*/*'
@@ -41,12 +33,27 @@ async function fetchBuffer(url) {
   return Buffer.from(res.data);
 }
 
-// Single API - adeel-xtech only
+// Single API - adeel-xtech only, with retry on the stream step
 async function downloadAudio(videoUrl) {
   const apiUrl = `https://adeel-xtech-apis.vercel.app/api/ytmp3?url=${encodeURIComponent(videoUrl)}`;
 
-  // Step 1: get metadata + stream link
-  const { data } = await axios.get(apiUrl, { timeout: 25000 });
+  // Step 1: get metadata + stream link (retry too, in case this call itself fails)
+  let data;
+  let lastMetaErr;
+  for (let i = 0; i < 3; i++) {
+    try {
+      const res = await axios.get(apiUrl, { timeout: 25000 });
+      data = res.data;
+      break;
+    } catch (err) {
+      lastMetaErr = err;
+      await sleep(1500);
+    }
+  }
+
+  if (!data) {
+    throw new Error(`API_UNREACHABLE: ${lastMetaErr?.message || 'unknown'}`);
+  }
 
   if (!data?.status || !data?.result?.audio_download) {
     throw new Error('API_NO_RESULT: ' + JSON.stringify(data));
@@ -60,26 +67,18 @@ async function downloadAudio(videoUrl) {
     creator: data.creator
   };
 
-  const proxyStreamUrl = data.result.audio_download;
-  const directTargetUrl = extractTargetUrl(proxyStreamUrl);
+  const streamUrl = data.result.audio_download;
 
-  // Try the direct source file first (bypasses Adeel's proxy, avoids their 500s),
-  // then fall back to the proxy URL itself if direct fails.
-  const attempts = [];
-  if (directTargetUrl) attempts.push(directTargetUrl);
-  attempts.push(proxyStreamUrl);
-  if (proxyStreamUrl.startsWith('http://')) {
-    attempts.push(proxyStreamUrl.replace('http://', 'https://'));
-  }
-
+  // Step 2: download actual audio - retry up to 3 times with delay,
+  // since the /stream proxy intermittently throws 500.
   let lastErr;
-  for (const url of attempts) {
+  for (let attempt = 1; attempt <= 3; attempt++) {
     try {
-      const buffer = await fetchBuffer(url);
+      const buffer = await fetchBuffer(streamUrl);
       return { buffer, meta };
     } catch (err) {
       lastErr = err;
-      continue;
+      if (attempt < 3) await sleep(2000 * attempt); // 2s, then 4s
     }
   }
 
