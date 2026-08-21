@@ -2,7 +2,6 @@ const { cmd } = require('../command');
 const axios = require('axios');
 const yts = require('yt-search');
 
-// Extract YouTube video ID from various URL formats
 function extractVideoId(url) {
   const match = url.match(
     /(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/embed\/|youtube\.com\/shorts\/)([a-zA-Z0-9_-]{11})/
@@ -18,7 +17,7 @@ function isYoutubeLink(text) {
 async function downloadAudio(videoUrl) {
   const apiUrl = `https://adeel-xtech-apis.vercel.app/api/ytmp3?url=${encodeURIComponent(videoUrl)}`;
 
-  // Step 1: call the API to get download link + meta
+  // Step 1: get metadata + stream link
   const { data } = await axios.get(apiUrl, { timeout: 25000 });
 
   if (!data?.status || !data?.result?.audio_download) {
@@ -33,23 +32,47 @@ async function downloadAudio(videoUrl) {
     creator: data.creator
   };
 
-  // Step 2: download the actual audio buffer
-  const audioRes = await axios.get(data.result.audio_download, {
-    responseType: 'arraybuffer',
-    timeout: 90000,
-    headers: {
-      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-    }
-  });
+  let streamUrl = data.result.audio_download;
 
-  if (!audioRes?.data || audioRes.data.length === 0) {
-    throw new Error('AUDIO_BUFFER_EMPTY');
+  // Step 2: download actual audio, try as-is first, then force https as fallback
+  const attempts = [streamUrl];
+  if (streamUrl.startsWith('http://')) {
+    attempts.push(streamUrl.replace('http://', 'https://'));
   }
 
-  return {
-    buffer: Buffer.from(audioRes.data),
-    meta
-  };
+  let lastErr;
+  for (const url of attempts) {
+    try {
+      const audioRes = await axios.get(url, {
+        responseType: 'arraybuffer',
+        timeout: 90000,
+        maxRedirects: 10,
+        validateStatus: (status) => status < 500,
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36',
+          'Accept': '*/*'
+        }
+      });
+
+      if (audioRes.status >= 400) {
+        lastErr = new Error(`Stream returned ${audioRes.status}`);
+        continue;
+      }
+
+      if (!audioRes?.data || audioRes.data.length === 0) {
+        lastErr = new Error('AUDIO_BUFFER_EMPTY');
+        continue;
+      }
+
+      return { buffer: Buffer.from(audioRes.data), meta };
+
+    } catch (err) {
+      lastErr = err;
+      continue;
+    }
+  }
+
+  throw lastErr || new Error('STREAM_DOWNLOAD_FAILED');
 }
 
 const commands = ["play", "song", "mp3"];
