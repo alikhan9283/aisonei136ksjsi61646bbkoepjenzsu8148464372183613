@@ -1,13 +1,10 @@
-const fs = require('fs');
-const path = require('path');
 const config = require('../config');
 const { cmd, commands } = require('../command');
 const { runtime } = require('../lib/functions');
-const converter = require('../data/converter');
 
-// Human-friendly labels + emoji for each category key. If a plugin uses a
-// category not listed here, it still shows up — grouped under its own
-// raw category name — so nothing from plugins/ ever silently disappears.
+// Emoji + label per category. Anything not listed here still shows up,
+// grouped under its own raw category name, so nothing in plugins/ is ever
+// silently dropped from the menu.
 const CATEGORY_META = {
     main:        { label: 'Main',        emoji: '🏠' },
     menu:        { label: 'Main',        emoji: '🏠' },
@@ -25,21 +22,22 @@ const CATEGORY_META = {
     search:      { label: 'Search',      emoji: '🔎' }
 };
 
+const ORDER = ['main', 'menu', 'download', 'downloader', 'group', 'fun', 'owner', 'ai', 'anime', 'convert', 'reactions', 'tools', 'search', 'other'];
+
 function metaFor(catKey) {
     return CATEGORY_META[catKey] || { label: catKey.charAt(0).toUpperCase() + catKey.slice(1), emoji: '📦' };
 }
 
-// Builds { categoryKey: [ {pattern, desc}, ... ] } straight from whatever
-// is currently registered in commands — so anything added to plugins/
-// shows up automatically next time the bot restarts, with no manual list
-// to keep in sync.
+// Reads every currently-registered command straight from commands, groups
+// it by category — so any plugin added later shows up automatically on
+// the bot's next restart with zero changes needed here.
 function buildCategoryMap() {
     const map = {};
     const list = Array.isArray(commands) ? commands : Object.values(commands || {});
 
     for (const c of list) {
         if (!c || !c.pattern) continue;
-        if (c.dontAddCommandList) continue; // respect a common "hide from menu" flag if plugins set it
+        if (c.dontAddCommandList) continue;
 
         const catKey = (c.category || 'other').toLowerCase();
         if (!map[catKey]) map[catKey] = [];
@@ -49,13 +47,8 @@ function buildCategoryMap() {
     for (const key in map) {
         map[key].sort((a, b) => a.pattern.localeCompare(b.pattern));
     }
-
     return map;
 }
-
-// Fixed display order for known categories; any unknown category (from a
-// plugin using a category name not in CATEGORY_META) is appended after.
-const ORDER = ['main', 'menu', 'download', 'downloader', 'group', 'fun', 'owner', 'ai', 'anime', 'convert', 'reactions', 'tools', 'search', 'other'];
 
 function orderedCategoryKeys(map) {
     const known = ORDER.filter(k => map[k]);
@@ -63,22 +56,20 @@ function orderedCategoryKeys(map) {
     return [...new Set([...known, ...unknown])];
 }
 
-function formatSection(catKey, items, prefix) {
-    const meta = metaFor(catKey);
-    const lines = items.map(c => {
-        const desc = c.desc ? ` — ${c.desc}` : '';
-        return `• *${prefix}${c.pattern}*${desc}`;
-    });
-    return `${meta.emoji} *${meta.label.toUpperCase()} MENU*\n${lines.join('\n')}`;
+// Bold-gold styled command list for a single card's body text.
+function formatCardBody(items, prefix) {
+    return items
+        .map(c => `✦ *${prefix}${c.pattern}*${c.desc ? `\n   ➤ ${c.desc}` : ''}`)
+        .join('\n\n');
 }
 
 cmd({
 pattern: "menu",
-desc: "Show interactive menu system",
+desc: "Show the full command menu as a scrollable carousel",
 category: "menu",
 react: "🧾",
 filename: __filename
-}, async (conn, mek, m, { from, reply, isOwner }) => {
+}, async (conn, mek, m, { from }) => {
 try {
     const totalCommands = Object.keys(commands).length;
     const botName = config.BOT_NAME || "SARWAR-MD";
@@ -86,43 +77,42 @@ try {
     const prefix = config.PREFIX || ".";
     const creatorName = "SARWAR-MD";
     const uptime = runtime(process.uptime());
+    const menuImage = config.MENU_IMAGE_URL || 'https://i.ibb.co/cKZNpnR9/MOON-MD.jpg';
 
-    // Build categories dynamically from whatever is actually registered
     const rawMap = buildCategoryMap();
-    // Merge "main" and "menu" categories into a single "main" bucket
     if (rawMap.menu) {
         rawMap.main = [...(rawMap.main || []), ...rawMap.menu];
         delete rawMap.menu;
     }
     const orderedKeys = orderedCategoryKeys(rawMap).filter(k => k !== 'menu');
 
-    // Number each section 1..N based on what's actually present
-    const sectionList = orderedKeys.map((key, i) => ({
-        number: String(i + 1),
-        key,
-        meta: metaFor(key),
-        items: rawMap[key]
-    }));
+    // Every category becomes one horizontally-scrollable card — the whole
+    // menu arrives in a single message, no reply/number-selection needed.
+    const cards = orderedKeys.map(key => {
+        const meta = metaFor(key);
+        const items = rawMap[key];
+        return {
+            image: { url: menuImage },
+            title: `${meta.emoji} ${meta.label.toUpperCase()} MENU`,
+            body: formatCardBody(items, prefix),
+            footer: `★ POWERED BY ${creatorName} ★`
+        };
+    });
 
-    const sectionLinesForOverview = sectionList
-        .map(s => `${s.number}. ${s.meta.emoji} ${s.meta.label} Menu`)
-        .join('\n');
+    const bodyText =
+`✦═══════════════✦
+   🥇 *${botName}* 🥇
+✦═══════════════✦
 
-    // ── Clean list style, no box-drawing ────────────────────────
-    const menuCaption = `*${botName}*
+➤ 𝗠𝗼𝗱𝗲: *${mode}*
+➤ 𝗣𝗿𝗲𝗳𝗶𝘅: *${prefix}*
+➤ 𝗥𝘂𝗻𝘁𝗶𝗺𝗲: *${uptime}*
+➤ 𝗖𝗿𝗲𝗮𝘁𝗼𝗿: *${creatorName}*
+➤ 𝗧𝗼𝘁𝗮𝗹 𝗖𝗺𝗱𝘀: *${totalCommands}*
 
-Mode: *${mode}*
-Prefix: *${prefix}*
-Runtime: *${uptime}*
-Creator: *${creatorName}*
-Total Commands: *${totalCommands}*
+Swipe through the cards below ➜ each one is a full menu section.
 
-*MENU SECTIONS*
-${sectionLinesForOverview}
-
-Reply with a number (1-${sectionList.length}) to open a section.
-
-*Powered by ${creatorName}*`;
+★ 𝗣𝗢𝗪𝗘𝗥𝗘𝗗 𝗕𝗬 *${creatorName}* ★`;
 
     const contextInfo = {
         mentionedJid: [m.sender],
@@ -135,149 +125,38 @@ Reply with a number (1-${sectionList.length}) to open a section.
         }
     };
 
-    const sendMenuImage = async () => {
-        try {
-            return await conn.sendMessage(
-                from,
-                {
-                    image: { url: config.MENU_IMAGE_URL || 'https://i.ibb.co/cKZNpnR9/MOON-MD.jpg' },
-                    caption: menuCaption,
-                    contextInfo: contextInfo
-                },
-                { quoted: mek }
-            );
-        } catch (e) {
-            console.log('Image send failed, falling back to text');
-            return await conn.sendMessage(
-                from,
-                { text: menuCaption, contextInfo: contextInfo },
-                { quoted: mek }
-            );
-        }
-    };
-
-    let sentMsg;
     try {
-        sentMsg = await Promise.race([
-            sendMenuImage(),
-            new Promise((_, reject) => setTimeout(() => reject(new Error('Image send timeout')), 10000))
-        ]);
+        await conn.sendMessage(from, {
+            text: bodyText,
+            title: `🥇 ${botName} MENU`,
+            subtitle: `${totalCommands} commands available`,
+            footer: `★ POWERED BY ${creatorName} ★`,
+            cards,
+            contextInfo
+        }, { quoted: mek });
     } catch (e) {
-        console.log('Menu send error:', e);
-        sentMsg = await conn.sendMessage(
-            from,
-            { text: menuCaption, contextInfo: contextInfo },
-            { quoted: mek }
-        );
+        // Fallback for bot forks where the carousel `cards` shape isn't
+        // supported by sendMessage — sends the same content as a single
+        // scroll-through text message instead of failing silently.
+        console.log('[MENU] Carousel send failed, falling back to text:', e.message);
+
+        const fallbackText = [
+            bodyText,
+            '',
+            ...cards.map(c => `${c.title}\n${c.body}\n${c.footer}`)
+        ].join('\n\n═══════════════\n\n');
+
+        await conn.sendMessage(from, {
+            image: { url: menuImage },
+            caption: fallbackText,
+            contextInfo
+        }, { quoted: mek });
     }
-
-    try {
-        const audioPath = path.join(__dirname, '../assets/menu-new.m4a');
-        if (fs.existsSync(audioPath)) {
-            const buffer = fs.readFileSync(audioPath);
-            const ptt = await converter.toPTT(buffer, 'm4a');
-
-            await conn.sendMessage(from, {
-                audio: ptt,
-                mimetype: 'audio/ogg; codecs=opus',
-                ptt: true,
-            }, { quoted: mek });
-        } else {
-            console.error('menu-new.m4a not found in assets folder');
-        }
-    } catch (audioError) {
-        console.log('Audio send error:', audioError);
-    }
-
-    const messageID = sentMsg.key.id;
-
-    // Build each section's reply text dynamically too
-    const menuData = {};
-    for (const s of sectionList) {
-        menuData[s.number] = {
-            title: `${formatSection(s.key, s.items, prefix)}\n\n*Powered by ${creatorName}*`,
-            image: true
-        };
-    }
-
-    const handler = async (msgData) => {
-        try {
-            const receivedMsg = msgData.messages[0];
-            if (!receivedMsg?.message || !receivedMsg.key?.remoteJid) return;
-
-            const isReplyToMenu = receivedMsg.message.extendedTextMessage?.contextInfo?.stanzaId === messageID;
-
-            if (isReplyToMenu) {
-                const receivedText = receivedMsg.message.conversation ||
-                                  receivedMsg.message.extendedTextMessage?.text;
-                const senderID = receivedMsg.key.remoteJid;
-
-                if (menuData[receivedText]) {
-                    const selectedMenu = menuData[receivedText];
-
-                    try {
-                        if (selectedMenu.image) {
-                            await conn.sendMessage(
-                                senderID,
-                                {
-                                    image: { url: config.MENU_IMAGE_URL || 'https://files.catbox.moe/zc57w6.jpg' },
-                                    caption: selectedMenu.title,
-                                    contextInfo: contextInfo
-                                },
-                                { quoted: receivedMsg }
-                            );
-                        } else {
-                            await conn.sendMessage(
-                                senderID,
-                                { text: selectedMenu.title, contextInfo: contextInfo },
-                                { quoted: receivedMsg }
-                            );
-                        }
-
-                        await conn.sendMessage(senderID, {
-                            react: { text: '✅', key: receivedMsg.key }
-                        });
-
-                    } catch (e) {
-                        console.log('Menu reply error:', e);
-                        await conn.sendMessage(
-                            senderID,
-                            { text: selectedMenu.title, contextInfo: contextInfo },
-                            { quoted: receivedMsg }
-                        );
-                    }
-
-                } else {
-                    await conn.sendMessage(
-                        senderID,
-                        {
-                            text: `❌ Invalid option! Please reply with a number between 1-${sectionList.length}.`
-                        },
-                        { quoted: receivedMsg }
-                    );
-                }
-            }
-        } catch (e) {
-            console.log('Handler error:', e);
-        }
-    };
-
-    conn.ev.on("messages.upsert", handler);
-
-    setTimeout(() => {
-        conn.ev.off("messages.upsert", handler);
-    }, 300000);
 
 } catch (e) {
     console.error('Menu Error:', e);
     try {
-        await conn.sendMessage(
-            from,
-            {
-                text: `❌ Menu system is busy. Please try again later.`
-            },
-            { quoted: mek }
-        );
+        await conn.sendMessage(from, { text: `❌ Menu system is busy. Please try again later.` }, { quoted: mek });
     } catch (finalError) {
         console.log('Final error handling failed:', finalError);
     }
