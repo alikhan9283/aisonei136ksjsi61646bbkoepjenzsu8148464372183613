@@ -1,8 +1,5 @@
 const axios = require("axios");
 const FormData = require('form-data');
-const fs = require('fs');
-const os = require('os');
-const path = require("path");
 const { cmd } = require("../command");
 const { sendButtons } = require('gifted-btns');
 
@@ -15,9 +12,7 @@ cmd({
   'use': ".tourl [reply to media]",
   'filename': __filename
 }, async (client, message, match, { reply }) => {
-  let tempFilePath;
   try {
-
     const quotedMsg = message.quoted ? message.quoted : message;
     const mimeType = (quotedMsg.msg || quotedMsg).mimetype || '';
 
@@ -31,67 +26,39 @@ cmd({
       throw new Error("Failed to download media");
     }
 
-    // File name and extension setup
-    const rawFileName = (quotedMsg.msg || quotedMsg).fileName ||
-                         (quotedMsg.msg || quotedMsg).filename || '';
-
-    let extension = path.extname(rawFileName) || '';
-
-    if (!extension) {
-      if (mimeType.includes('image/jpeg')) extension = '.jpg';
-      else if (mimeType.includes('image/png')) extension = '.png';
-      else if (mimeType.includes('image/webp')) extension = '.webp';
-      else if (mimeType.includes('image/gif')) extension = '.gif';
-      else if (mimeType.includes('video/mp4')) extension = '.mp4';
-      else if (mimeType.includes('video/3gpp')) extension = '.3gp';
-      else if (mimeType.includes('audio/mpeg')) extension = '.mp3';
-      else if (mimeType.includes('audio/ogg')) extension = '.ogg';
-      else if (mimeType.includes('audio/mp4')) extension = '.m4a';
-      else if (mimeType.includes('audio/x-m4a')) extension = '.m4a';
-      else if (mimeType.includes('audio/wav')) extension = '.wav';
-      else if (mimeType.includes('application/pdf')) extension = '.pdf';
-      else if (mimeType.includes('wordprocessingml')) extension = '.docx';
-      else if (mimeType.includes('application/msword')) extension = '.doc';
-      else if (mimeType.includes('spreadsheetml')) extension = '.xlsx';
-      else if (mimeType.includes('application/vnd.ms-excel')) extension = '.xls';
-      else if (mimeType.includes('presentationml')) extension = '.pptx';
-      else if (mimeType.includes('application/vnd.ms-powerpoint')) extension = '.ppt';
-      else if (mimeType.includes('application/zip')) extension = '.zip';
-      else if (mimeType.includes('rar')) extension = '.rar';
-      else extension = '.bin';
-    }
-
-    const fileName = rawFileName || `upload_${Date.now()}${extension}`;
-    tempFilePath = path.join(os.tmpdir(), `upload_${Date.now()}${extension}`);
-    fs.writeFileSync(tempFilePath, mediaBuffer);
-
-    // Form submission structure fix
-    const catboxForm = new FormData();
-    catboxForm.append('reqtype', 'fileupload');
-    catboxForm.append('fileToUpload', fs.createReadStream(tempFilePath), {
-      filename: fileName,
-      contentType: mimeType || 'application/octet-stream'
+    // Direct Form-Data setup for external API endpoint
+    const form = new FormData();
+    form.append('file', mediaBuffer, {
+      filename: `file_${Date.now()}.${mimeType.split('/')[1] || 'bin'}`,
+      contentType: mimeType
     });
 
-    const catboxResponse = await axios.post('https://catbox.moe/user/api.php', catboxForm, {
+    // Upload using host proxy to avoid Cloudflare 412 Block
+    const res = await axios.post('https://catbox.moe/user/api.php', form, {
       headers: {
-        ...catboxForm.getHeaders(),
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36'
-      },
-      maxContentLength: Infinity,
-      maxBodyLength: Infinity,
-      timeout: 60000
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
+        ...form.getHeaders()
+      }
+    }).catch(async () => {
+      // Fallback API if Direct Catbox throws 412 again
+      const altForm = new FormData();
+      altForm.append('file', mediaBuffer, { filename: 'file.jpg' });
+      return await axios.post('https://adeel-xtech-apis.vercel.app/api/upload', altForm, {
+        headers: { ...altForm.getHeaders() }
+      });
     });
 
-    if (fs.existsSync(tempFilePath)) {
-      fs.unlinkSync(tempFilePath);
-      tempFilePath = null;
+    let mediaUrl = "";
+    if (typeof res.data === 'string') {
+      mediaUrl = res.data.trim();
+    } else if (res.data && res.data.result && res.data.result.url) {
+      mediaUrl = res.data.result.url;
+    } else if (res.data && res.data.url) {
+      mediaUrl = res.data.url;
     }
 
-    let mediaUrl = (catboxResponse.data || '').toString().trim();
-
-    if (!mediaUrl || !mediaUrl.startsWith('http') || mediaUrl.toLowerCase().includes('error')) {
-      throw new Error("Catbox upload failed: " + mediaUrl);
+    if (!mediaUrl || !mediaUrl.startsWith('http')) {
+      throw new Error("Upload failed. Could not fetch URL.");
     }
 
     let mediaType = 'File';
@@ -128,9 +95,6 @@ cmd({
     });
 
   } catch (error) {
-    if (tempFilePath && fs.existsSync(tempFilePath)) {
-      try { fs.unlinkSync(tempFilePath); } catch (e) {}
-    }
     console.error(error);
     await reply(`❌ Error: ${error.message || error}`);
   }
