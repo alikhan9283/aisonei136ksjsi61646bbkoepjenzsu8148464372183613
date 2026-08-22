@@ -12,7 +12,6 @@ cmd({
   'filename': __filename
 }, async (client, message, match, { reply }) => {
   try {
-    // FIX: Safely parse `match` regardless of whether it's String, Array, or Object
     let query = '';
     if (typeof match === 'string') {
       query = match.trim();
@@ -22,10 +21,9 @@ cmd({
       query = (match.text || match.query || '').trim();
     }
 
-    // Fallback if match parameter is empty: extract text directly from message
     if (!query && message.text) {
       const parts = message.text.split(' ');
-      parts.shift(); // Remove command pattern (.ttsearch)
+      parts.shift();
       query = parts.join(' ').trim();
     }
 
@@ -35,19 +33,27 @@ cmd({
 
     let searchResults = [];
 
-    // PRIMARY LOGIC: tikwm API
+    // METHOD 1: TikWM POST Request (Most reliable for search)
     try {
-      const res1 = await axios.get(`https://tikwm.com/api/feed/search?keywords=${encodeURIComponent(query)}&count=10`, {
+      const params = new URLSearchParams();
+      params.append('keywords', query);
+      params.append('count', '10');
+      params.append('cursor', '0');
+      params.append('web', '1');
+
+      const res1 = await axios.post('https://tikwm.com/api/feed/search', params, {
         headers: {
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0 Safari/537.36'
+          'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
+          'User-Agent': 'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36',
+          'Accept': 'application/json, text/javascript, */*; q=0.01'
         },
-        timeout: 15000
+        timeout: 20000
       });
 
       if (res1.data && res1.data.data && res1.data.data.videos && res1.data.data.videos.length > 0) {
         searchResults = res1.data.data.videos.map(v => ({
           title: v.title || 'TikTok Video',
-          playUrl: v.play || v.wmplay,
+          playUrl: v.play ? (v.play.startsWith('http') ? v.play : `https://tikwm.com${v.play}`) : '',
           cover: v.cover,
           author: v.author ? v.author.nickname : 'Unknown',
           views: v.play_count || 0,
@@ -55,58 +61,41 @@ cmd({
         }));
       }
     } catch (e1) {
-      console.log("Primary TikTok API failed, attempting Backup API 1...");
+      console.log("TikWM POST search failed, trying fallback...");
     }
 
-    // FALLBACK LOGIC 1: Vercel TikTok Downloader API
+    // METHOD 2: Direct Search Stream Backup
     if (searchResults.length === 0) {
       try {
-        const res2 = await axios.get(`https://tiktok-downloader-api.vercel.app/api/search?q=${encodeURIComponent(query)}&limit=10`, {
+        const res2 = await axios.get(`https://tikwm.com/api/feed/search?keywords=${encodeURIComponent(query)}`, {
+          headers: {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/122.0.0.0 Safari/537.36'
+          },
           timeout: 15000
         });
 
-        if (res2.data && res2.data.data && res2.data.data.length > 0) {
-          searchResults = res2.data.data.map(v => ({
-            title: v.title || v.caption || 'TikTok Video',
-            playUrl: v.play || v.nowatermark || v.url,
+        if (res2.data && res2.data.data && res2.data.data.videos) {
+          searchResults = res2.data.data.videos.map(v => ({
+            title: v.title || 'TikTok Video',
+            playUrl: v.play ? (v.play.startsWith('http') ? v.play : `https://tikwm.com${v.play}`) : '',
             cover: v.cover,
             author: v.author ? v.author.nickname : 'Unknown',
-            views: v.views || 0,
-            likes: v.likes || 0
+            views: v.play_count || 0,
+            likes: v.digg_count || 0
           }));
         }
       } catch (e2) {
-        console.log("Backup API 1 failed, attempting Backup API 2...");
+        console.log("Secondary API failed.");
       }
     }
 
-    // FALLBACK LOGIC 2: Public Backup Endpoint
-    if (searchResults.length === 0) {
-      try {
-        const res3 = await axios.get(`https://api.tiklydown.eu.org/api/download?url=${encodeURIComponent(query)}`, {
-          timeout: 15000
-        });
-
-        if (res3.data && res3.data.video && res3.data.video.noWatermark) {
-          searchResults.push({
-            title: res3.data.title || 'TikTok Video',
-            playUrl: res3.data.video.noWatermark,
-            cover: res3.data.cover,
-            author: res3.data.author ? res3.data.author.name : 'Unknown',
-            views: 0,
-            likes: 0
-          });
-        }
-      } catch (e3) {
-        console.log("All TikTok search APIs failed.");
-      }
-    }
+    // Filter valid downloadable links
+    searchResults = searchResults.filter(item => item.playUrl !== '');
 
     if (searchResults.length === 0) {
-      throw new Error("No TikTok results found for your search query. Please try different keywords.");
+      return reply("❌ Unable to fetch TikTok results right now. Please try again with a different query.");
     }
 
-    // Send Top Video Result
     const firstVideo = searchResults[0];
 
     const caption = 
@@ -115,29 +104,13 @@ cmd({
       `*👤 Author:* ${firstVideo.author}\n` +
       `*👁️ Views:* ${formatNumber(firstVideo.views)}\n` +
       `*❤️ Likes:* ${formatNumber(firstVideo.likes)}\n\n` +
-      `> *© ꜱᴇᴀʀᴄʜᴇᴅ ʙʏ ꜱᴀʀᴡᴀʀ-ᴍ德 🍸*`;
+      `> *© ꜱᴇᴀʀᴄʜᴇᴅ ʙʏ ꜱᴀʀᴡᴀʀ-ᴍᴅ 🍸*`;
 
-    // Send Video file
-    if (firstVideo.playUrl) {
-      await client.sendMessage(message.chat, {
-        video: { url: firstVideo.playUrl },
-        caption: caption
-      }, { quoted: message });
-    } else {
-      await sendButtons(client, message.chat, {
-        title: '',
-        text: caption,
-        buttons: [
-          {
-            name: 'cta_url',
-            buttonParamsJson: JSON.stringify({
-              display_text: '🌐 Watch Online',
-              url: firstVideo.playUrl
-            })
-          }
-        ]
-      });
-    }
+    // Send Video file directly
+    await client.sendMessage(message.chat, {
+      video: { url: firstVideo.playUrl },
+      caption: caption
+    }, { quoted: message });
 
   } catch (error) {
     console.error("TikTok Search Error:", error);
