@@ -28,10 +28,10 @@ cmd({
     const mediaBuffer = await quotedMsg.download();
 
     if (!mediaBuffer || mediaBuffer.length === 0) {
-      throw "Failed to download media";
+      throw new Error("Failed to download media");
     }
 
-    // Get real filename if it's a document
+    // File name and extension setup
     const rawFileName = (quotedMsg.msg || quotedMsg).fileName ||
                          (quotedMsg.msg || quotedMsg).filename || '';
 
@@ -65,28 +65,33 @@ cmd({
     tempFilePath = path.join(os.tmpdir(), `upload_${Date.now()}${extension}`);
     fs.writeFileSync(tempFilePath, mediaBuffer);
 
+    // Form submission structure fix
     const catboxForm = new FormData();
     catboxForm.append('reqtype', 'fileupload');
-    catboxForm.append('fileToUpload', fs.createReadStream(tempFilePath), fileName);
+    catboxForm.append('fileToUpload', fs.createReadStream(tempFilePath), {
+      filename: fileName,
+      contentType: mimeType || 'application/octet-stream'
+    });
 
     const catboxResponse = await axios.post('https://catbox.moe/user/api.php', catboxForm, {
       headers: {
         ...catboxForm.getHeaders(),
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        'Accept': '*/*'
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36'
       },
-      timeout: 120000,
       maxContentLength: Infinity,
-      maxBodyLength: Infinity
+      maxBodyLength: Infinity,
+      timeout: 60000
     });
 
-    fs.unlinkSync(tempFilePath);
-    tempFilePath = null;
+    if (fs.existsSync(tempFilePath)) {
+      fs.unlinkSync(tempFilePath);
+      tempFilePath = null;
+    }
 
     let mediaUrl = (catboxResponse.data || '').toString().trim();
 
     if (!mediaUrl || !mediaUrl.startsWith('http') || mediaUrl.toLowerCase().includes('error')) {
-      throw "Catbox upload failed: " + mediaUrl;
+      throw new Error("Catbox upload failed: " + mediaUrl);
     }
 
     let mediaType = 'File';
