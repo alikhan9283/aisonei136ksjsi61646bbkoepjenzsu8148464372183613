@@ -1,6 +1,5 @@
 const axios = require("axios");
 const { cmd } = require("../command");
-const { sendButtons } = require('gifted-btns');
 
 cmd({
   'pattern': "ttsearch",
@@ -33,67 +32,51 @@ cmd({
 
     let searchResults = [];
 
-    // METHOD 1: TikWM POST Request (Most reliable for search)
+    // METHOD 1: Direct Delirius / Alternative TikTok Search API
     try {
-      const params = new URLSearchParams();
-      params.append('keywords', query);
-      params.append('count', '10');
-      params.append('cursor', '0');
-      params.append('web', '1');
-
-      const res1 = await axios.post('https://tikwm.com/api/feed/search', params, {
-        headers: {
-          'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
-          'User-Agent': 'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36',
-          'Accept': 'application/json, text/javascript, */*; q=0.01'
-        },
+      const res1 = await axios.get(`https://deliriussapi-oficial.vercel.app/search/tiktok?query=${encodeURIComponent(query)}`, {
         timeout: 20000
       });
 
-      if (res1.data && res1.data.data && res1.data.data.videos && res1.data.data.videos.length > 0) {
-        searchResults = res1.data.data.videos.map(v => ({
+      if (res1.data && res1.data.status && res1.data.data && res1.data.data.length > 0) {
+        searchResults = res1.data.data.map(v => ({
           title: v.title || 'TikTok Video',
-          playUrl: v.play ? (v.play.startsWith('http') ? v.play : `https://tikwm.com${v.play}`) : '',
-          cover: v.cover,
-          author: v.author ? v.author.nickname : 'Unknown',
-          views: v.play_count || 0,
-          likes: v.digg_count || 0
+          playUrl: v.meta ? v.meta.media[0].org : (v.no_watermark || v.nowm),
+          author: v.author ? v.author.nickname : 'TikTok User',
+          views: v.views || 0,
+          likes: v.like || 0
         }));
       }
     } catch (e1) {
-      console.log("TikWM POST search failed, trying fallback...");
+      console.log("Method 1 API failed, attempting Method 2...");
     }
 
-    // METHOD 2: Direct Search Stream Backup
+    // METHOD 2: Siputzx TikTok Search API Backup
     if (searchResults.length === 0) {
       try {
-        const res2 = await axios.get(`https://tikwm.com/api/feed/search?keywords=${encodeURIComponent(query)}`, {
-          headers: {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/122.0.0.0 Safari/537.36'
-          },
-          timeout: 15000
+        const res2 = await axios.get(`https://api.siputzx.my.id/api/s/tiktok?query=${encodeURIComponent(query)}`, {
+          timeout: 20000
         });
 
-        if (res2.data && res2.data.data && res2.data.data.videos) {
-          searchResults = res2.data.data.videos.map(v => ({
+        if (res2.data && res2.data.status && res2.data.data && res2.data.data.length > 0) {
+          searchResults = res2.data.data.map(v => ({
             title: v.title || 'TikTok Video',
-            playUrl: v.play ? (v.play.startsWith('http') ? v.play : `https://tikwm.com${v.play}`) : '',
-            cover: v.cover,
-            author: v.author ? v.author.nickname : 'Unknown',
+            playUrl: v.no_watermark || v.play || v.wm,
+            author: v.author ? v.author.nickname : 'TikTok User',
             views: v.play_count || 0,
             likes: v.digg_count || 0
           }));
         }
       } catch (e2) {
-        console.log("Secondary API failed.");
+        console.log("Method 2 API failed.");
       }
     }
 
-    // Filter valid downloadable links
-    searchResults = searchResults.filter(item => item.playUrl !== '');
+    // Filter array to get valid video URLs
+    searchResults = searchResults.filter(item => item.playUrl && item.playUrl.startsWith('http'));
 
     if (searchResults.length === 0) {
-      return reply("❌ Unable to fetch TikTok results right now. Please try again with a different query.");
+      return reply("❌ Search API blocked by TikTok. Try again after a few seconds or try another query.");
     }
 
     const firstVideo = searchResults[0];
@@ -101,12 +84,10 @@ cmd({
     const caption = 
       `*🎵 T I K T O K  S E A R C H*\n\n` +
       `*📌 Title:* ${firstVideo.title}\n` +
-      `*👤 Author:* ${firstVideo.author}\n` +
-      `*👁️ Views:* ${formatNumber(firstVideo.views)}\n` +
-      `*❤️ Likes:* ${formatNumber(firstVideo.likes)}\n\n` +
+      `*👤 Author:* ${firstVideo.author}\n\n` +
       `> *© ꜱᴇᴀʀᴄʜᴇᴅ ʙʏ ꜱᴀʀᴡᴀʀ-ᴍᴅ 🍸*`;
 
-    // Send Video file directly
+    // Send Direct Video Buffer stream
     await client.sendMessage(message.chat, {
       video: { url: firstVideo.playUrl },
       caption: caption
@@ -117,8 +98,3 @@ cmd({
     await reply(`❌ Error: ${error.message || error}`);
   }
 });
-
-function formatNumber(num) {
-  if (!num || isNaN(num)) return '0';
-  return Number(num).toLocaleString();
-}
