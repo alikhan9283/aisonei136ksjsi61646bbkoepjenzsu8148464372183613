@@ -1,233 +1,147 @@
-// commands/tiktoksearch.js
-// SARWAR MD — TikTok Search (Working)
+// commands/tourl.js
+// SARWAR MD — Media to URL Uploader
 
 const axios = require('axios');
+const fs = require('fs');
+const path = require('path');
+const os = require('os');
+const FormData = require('form-data');
+const { cmd } = require("../command");
 
-// ─────────────────────────────────────────────────────────────
-//  WORKING APIS
-// ─────────────────────────────────────────────────────────────
-const APIS = [
-    {
-        name: "TikWM",
-        url: (q) => `https://tikwm.com/api/feed/search?keywords=${encodeURIComponent(q)}&count=10`,
-        extract: (data) => {
-            if (data?.data && Array.isArray(data.data)) {
-                return data.data.map(v => ({
-                    title: v.title || 'No Title',
-                    author: v.author?.unique_id || 'Unknown',
-                    play: v.play || null,
-                    digg_count: v.digg_count || 0,
-                    comment_count: v.comment_count || 0,
-                    duration: v.duration || 'N/A'
-                }));
-            }
-            return null;
-        }
-    },
-    {
-        name: "TikTok Search",
-        url: (q) => `https://tiktok-search-api.vercel.app/api/search?q=${encodeURIComponent(q)}&limit=10`,
-        extract: (data) => {
-            if (data?.results && Array.isArray(data.results)) {
-                return data.results.map(v => ({
-                    title: v.title || 'No Title',
-                    author: v.author || 'Unknown',
-                    play: v.video_url || null,
-                    digg_count: v.likes || 0,
-                    comment_count: v.comments || 0,
-                    duration: 'N/A'
-                }));
-            }
-            return null;
-        }
-    },
-    {
-        name: "TikTok Video",
-        url: (q) => `https://tiktok-video-api.vercel.app/api/search?q=${encodeURIComponent(q)}&limit=10`,
-        extract: (data) => {
-            if (data?.videos && Array.isArray(data.videos)) {
-                return data.videos.map(v => ({
-                    title: v.title || 'No Title',
-                    author: v.author || 'Unknown',
-                    play: v.video_url || null,
-                    digg_count: v.likes || 0,
-                    comment_count: v.comments || 0,
-                    duration: 'N/A'
-                }));
-            }
-            return null;
-        }
-    },
-    {
-        name: "TikTok Direct",
-        url: (q) => `https://tiktok-search-direct.vercel.app/api/search?q=${encodeURIComponent(q)}&limit=10`,
-        extract: (data) => {
-            if (data?.results && Array.isArray(data.results)) {
-                return data.results.map(v => ({
-                    title: v.title || 'No Title',
-                    author: v.author || 'Unknown',
-                    play: v.video_url || null,
-                    digg_count: v.likes || 0,
-                    comment_count: v.comments || 0,
-                    duration: 'N/A'
-                }));
-            }
-            return null;
-        }
-    },
-    {
-        name: "TikTok Discovery",
-        url: (q) => `https://tiktok-discovery-api.vercel.app/api/search?q=${encodeURIComponent(q)}&limit=10`,
-        extract: (data) => {
-            if (data?.discovery && Array.isArray(data.discovery)) {
-                return data.discovery.map(v => ({
-                    title: v.title || 'No Title',
-                    author: v.author || 'Unknown',
-                    play: v.video_url || null,
-                    digg_count: v.likes || 0,
-                    comment_count: v.comments || 0,
-                    duration: 'N/A'
-                }));
-            }
-            return null;
-        }
-    }
-];
-
-module.exports = {
-    pattern: "tiktoksearch",
-    alias: ["tts", "ttsearch", "tiktoks"],
-    desc: "🔍 Search TikTok videos",
-    react: "🔍",
-    category: "search",
+cmd({
+    pattern: "tourl",
+    alias: ["imgtourl", "imgurl", "url", "geturl", "upload"],
+    react: "🖇",
+    desc: "📤 Convert media to Catbox URL",
+    category: "utility",
     filename: __filename,
-    use: ".tiktoksearch <query>",
+    use: ".tourl [reply to media]"
+}, async (conn, message, m, { from, reply }) => {
+    try {
+        // Check if media is quoted
+        const quotedMsg = message.quoted || message;
+        const mimeType = (quotedMsg.msg || quotedMsg).mimetype || '';
 
-    execute: async (conn, message, m, { from, args, q, reply }) => {
-        try {
-            const query = args.join(" ") || q;
-            if (!query) {
-                return reply(`🔍 *TIKTOK SEARCH*
+        if (!mimeType) {
+            return reply(`🖇 *MEDIA TO URL*
 
 ╭━━━〔 USAGE 〕━━━╮
-│ .tiktoksearch <query>
+│ Reply to an image, video, or audio
+│ with .tourl
 ╰━━━━━━━━━━━━━━━━╯
 
 📝 *Example:*
-.tiktoksearch cats
-.tiktoksearch funny videos
+• Reply to an image
+• Type: .tourl
 
-⚡ *5 Working APIs with Auto-Fallback*
-
-> *ᴘᴏᴡᴇʀᴇᴅ ʙʏ sᴀʀᴡᴀʀ-ᴍᴅ ⚡*`);
-            }
-
-            await conn.sendMessage(from, {
-                react: { text: '🔍', key: message.key }
-            });
-
-            let results = null;
-            let usedAPI = '';
-
-            for (const api of APIS) {
-                try {
-                    const response = await axios.get(api.url(query), {
-                        timeout: 10000,
-                        headers: {
-                            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-                        }
-                    });
-                    const extracted = api.extract(response.data);
-                    if (extracted && extracted.length > 0) {
-                        results = extracted;
-                        usedAPI = api.name;
-                        console.log(`✅ ${api.name} working!`);
-                        break;
-                    }
-                } catch (e) {
-                    console.log(`❌ API failed:`, e.message);
-                    continue;
-                }
-            }
-
-            if (!results || results.length === 0) {
-                await conn.sendMessage(from, {
-                    react: { text: '❌', key: message.key }
-                });
-                return reply(`❌ *No results found!*
-
-📝 Query: "${query}"
-
-💡 *Try different keywords*
+⚡ *Features:*
+• Uploads to Catbox
+• Returns direct URL
+• Supports all media types
 
 > *ᴘᴏᴡᴇʀᴇᴅ ʙʏ sᴀʀᴡᴀʀ-ᴍᴅ ⚡*`);
-            }
+        }
 
-            const videos = results.slice(0, 8);
-            let sent = 0;
+        // Send reaction
+        await conn.sendMessage(from, {
+            react: { text: '🖇', key: message.key }
+        });
 
-            await conn.sendMessage(from, {
-                text: `✅ *Found ${videos.length} videos!*
-📡 API: ${usedAPI}
-📝 Query: "${query}"
+        // Download media
+        const mediaBuffer = await quotedMsg.download();
+        if (!mediaBuffer || mediaBuffer.length === 0) {
+            throw new Error("Failed to download media");
+        }
 
-⏳ Sending...
+        // Determine extension
+        let extension = '';
+        if (mimeType.includes('image/jpeg')) extension = '.jpg';
+        else if (mimeType.includes('image/png')) extension = '.png';
+        else if (mimeType.includes('image/webp')) extension = '.webp';
+        else if (mimeType.includes('video/mp4')) extension = '.mp4';
+        else if (mimeType.includes('audio/mpeg')) extension = '.mp3';
+        else if (mimeType.includes('audio/ogg')) extension = '.ogg';
+        else if (mimeType.includes('audio/mp4')) extension = '.m4a';
+        else if (mimeType.includes('audio/x-m4a')) extension = '.m4a';
+        else if (mimeType.includes('audio/wav')) extension = '.wav';
+        else if (mimeType.includes('image/gif')) extension = '.gif';
+        else extension = '.bin';
 
-> *ᴘᴏᴡᴇʀᴇᴅ ʙʏ sᴀʀᴡᴀʀ-ᴍᴅ ⚡*`
-            }, { quoted: message });
+        // Save temp file
+        const tempFilePath = path.join(os.tmpdir(), `upload_${Date.now()}${extension}`);
+        fs.writeFileSync(tempFilePath, mediaBuffer);
 
-            for (const video of videos) {
-                try {
-                    const caption = `🎥 *TIKTOK VIDEO*
+        // Upload using FormData
+        const form = new FormData();
+        form.append('file', fs.createReadStream(tempFilePath), `file${extension}`);
+
+        const response = await axios.post('https://adeel-xtech-apis.vercel.app/api/imgtourl', form, {
+            headers: {
+                ...form.getHeaders(),
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+            },
+            timeout: 60000
+        });
+
+        // Clean up temp file
+        if (fs.existsSync(tempFilePath)) {
+            fs.unlinkSync(tempFilePath);
+        }
+
+        // Check response
+        if (!response.data || response.data.status !== true || !response.data.result || !response.data.result.url) {
+            throw new Error("Failed to upload to API");
+        }
+
+        const mediaUrl = response.data.result.url.trim();
+
+        // Determine media type
+        let mediaType = '📁 File';
+        if (mimeType.includes('image')) mediaType = '📸 Image';
+        else if (mimeType.includes('video')) mediaType = '🎬 Video';
+        else if (mimeType.includes('audio')) mediaType = '🎵 Audio';
+
+        // Format file size
+        const size = formatBytes(mediaBuffer.length);
+
+        // Send response
+        const caption = `🖇 *${mediaType} UPLOADED*
 
 ╭━━━〔 DETAILS 〕━━━╮
-│ 📝 ${video.title?.slice(0, 50) || 'No Title'}
-│ 👤 @${video.author || 'Unknown'}
-│ ⏱️ ${video.duration || 'N/A'}
-│ ❤️ ${video.digg_count || 0}
-│ 💬 ${video.comment_count || 0}
+│ 📦 Size: ${size}
+│ 🔗 URL: ${mediaUrl}
 ╰━━━━━━━━━━━━━━━━╯
-
-📡 API: ${usedAPI}
 
 > *ᴘᴏᴡᴇʀᴇᴅ ʙʏ sᴀʀᴡᴀʀ-ᴍᴅ ⚡*`;
 
-                    if (video.play) {
-                        await conn.sendMessage(from, {
-                            video: { url: video.play },
-                            caption: caption
-                        }, { quoted: message });
-                        sent++;
-                    } else {
-                        await conn.sendMessage(from, {
-                            text: `⚠️ No video URL for: ${video.title?.slice(0, 30) || 'Unknown'}`
-                        }, { quoted: message });
-                    }
-                    await new Promise(resolve => setTimeout(resolve, 300));
-                } catch (e) {
-                    console.log('Send error:', e.message);
-                }
-            }
+        await conn.sendMessage(from, {
+            text: caption
+        }, { quoted: message });
 
-            await conn.sendMessage(from, {
-                react: { text: '✅', key: message.key }
-            });
+        // Send URL as copyable text
+        await conn.sendMessage(from, {
+            text: `📋 *Copy this URL:*\n${mediaUrl}`
+        }, { quoted: message });
 
-            await conn.sendMessage(from, {
-                text: `✅ *Search Complete!*
+        await conn.sendMessage(from, {
+            react: { text: '✅', key: message.key }
+        });
 
-📊 Sent: ${sent}/${videos.length} videos
-📡 API: ${usedAPI}
-
-> *ᴘᴏᴡᴇʀᴇᴅ ʙʏ sᴀʀᴡᴀʀ-ᴍᴅ ⚡*`
-            }, { quoted: message });
-
-        } catch (error) {
-            console.error("❌ TikTok Search Error:", error);
-            await conn.sendMessage(from, {
-                react: { text: '❌', key: message.key }
-            });
-            reply(`❌ *Error!*\n\n${error.message}\n\n> *ᴘᴏᴡᴇʀᴇᴅ ʙʏ sᴀʀᴡᴀʀ-ᴍᴅ ⚡*`);
-        }
+    } catch (error) {
+        console.error("❌ Tourl Error:", error);
+        await conn.sendMessage(from, {
+            react: { text: '❌', key: message.key }
+        });
+        reply(`❌ *Error:* ${error.message || error}\n\n> *ᴘᴏᴡᴇʀᴇᴅ ʙʏ sᴀʀᴡᴀʀ-ᴍᴅ ⚡*`);
     }
-};
+});
+
+// ─────────────────────────────────────────────────────────────
+//  HELPER: Format Bytes
+// ─────────────────────────────────────────────────────────────
+function formatBytes(bytes) {
+    if (bytes < 1024) return bytes + ' B';
+    if (bytes < 1048576) return (bytes / 1024).toFixed(1) + ' KB';
+    if (bytes < 1073741824) return (bytes / 1048576).toFixed(1) + ' MB';
+    return (bytes / 1073741824).toFixed(1) + ' GB';
+}
