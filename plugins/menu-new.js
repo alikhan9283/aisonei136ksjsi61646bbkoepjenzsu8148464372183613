@@ -1,10 +1,76 @@
 const fs = require('fs');
+const path = require('path');
 const config = require('../config');
 const { cmd, commands } = require('../command');
 const { runtime } = require('../lib/functions');
-const axios = require('axios');
-const path = require('path');
 const converter = require('../data/converter');
+
+// Human-friendly labels + emoji for each category key. If a plugin uses a
+// category not listed here, it still shows up — grouped under its own
+// raw category name — so nothing from plugins/ ever silently disappears.
+const CATEGORY_META = {
+    main:        { label: 'Main',        emoji: '🏠' },
+    menu:        { label: 'Main',        emoji: '🏠' },
+    download:    { label: 'Download',    emoji: '📥' },
+    downloader:  { label: 'Download',    emoji: '📥' },
+    group:       { label: 'Group',       emoji: '👥' },
+    fun:         { label: 'Fun',         emoji: '😄' },
+    owner:       { label: 'Owner',       emoji: '👑' },
+    ai:          { label: 'AI',          emoji: '🤖' },
+    anime:       { label: 'Anime',       emoji: '🎎' },
+    convert:     { label: 'Convert',     emoji: '🔄' },
+    tools:       { label: 'Tools',       emoji: '🛠️' },
+    other:       { label: 'Other',       emoji: '📌' },
+    reactions:   { label: 'Reactions',   emoji: '💞' },
+    search:      { label: 'Search',      emoji: '🔎' }
+};
+
+function metaFor(catKey) {
+    return CATEGORY_META[catKey] || { label: catKey.charAt(0).toUpperCase() + catKey.slice(1), emoji: '📦' };
+}
+
+// Builds { categoryKey: [ {pattern, desc}, ... ] } straight from whatever
+// is currently registered in commands — so anything added to plugins/
+// shows up automatically next time the bot restarts, with no manual list
+// to keep in sync.
+function buildCategoryMap() {
+    const map = {};
+    const list = Array.isArray(commands) ? commands : Object.values(commands || {});
+
+    for (const c of list) {
+        if (!c || !c.pattern) continue;
+        if (c.dontAddCommandList) continue; // respect a common "hide from menu" flag if plugins set it
+
+        const catKey = (c.category || 'other').toLowerCase();
+        if (!map[catKey]) map[catKey] = [];
+        map[catKey].push({ pattern: c.pattern, desc: c.desc || '' });
+    }
+
+    for (const key in map) {
+        map[key].sort((a, b) => a.pattern.localeCompare(b.pattern));
+    }
+
+    return map;
+}
+
+// Fixed display order for known categories; any unknown category (from a
+// plugin using a category name not in CATEGORY_META) is appended after.
+const ORDER = ['main', 'menu', 'download', 'downloader', 'group', 'fun', 'owner', 'ai', 'anime', 'convert', 'reactions', 'tools', 'search', 'other'];
+
+function orderedCategoryKeys(map) {
+    const known = ORDER.filter(k => map[k]);
+    const unknown = Object.keys(map).filter(k => !ORDER.includes(k)).sort();
+    return [...new Set([...known, ...unknown])];
+}
+
+function formatSection(catKey, items, prefix) {
+    const meta = metaFor(catKey);
+    const lines = items.map(c => {
+        const desc = c.desc ? ` — ${c.desc}` : '';
+        return `• *${prefix}${c.pattern}*${desc}`;
+    });
+    return `${meta.emoji} *${meta.label.toUpperCase()} MENU*\n${lines.join('\n')}`;
+}
 
 cmd({
 pattern: "menu",
@@ -14,42 +80,49 @@ react: "🧾",
 filename: __filename
 }, async (conn, mek, m, { from, reply, isOwner }) => {
 try {
-
-const totalCommands = Object.keys(commands).length;
-
+    const totalCommands = Object.keys(commands).length;
     const botName = config.BOT_NAME || "SARWAR-MD";
     const mode = config.MODE || "public";
     const prefix = config.PREFIX || ".";
     const creatorName = "SARWAR-MD";
     const uptime = runtime(process.uptime());
 
-    // ── Bold + Gold box-drawing style ──────────────────────────
-    const menuCaption = `┏━❮ 🥇 *${botName}* ❯━┓
-┃
-┃ 𝗠𝗢𝗗𝗘 ➤ *${mode}*
-┃ 𝗣𝗥𝗘𝗙𝗜𝗫 ➤ *[${prefix}]*
-┃ 𝗥𝗨𝗡𝗧𝗜𝗠𝗘 ➤ *${uptime}*
-┃ 𝗖𝗥𝗘𝗔𝗧𝗢𝗥 ➤ *${creatorName}*
-┃ 𝗧𝗢𝗧𝗔𝗟 𝗖𝗠𝗗𝗦 ➤ *${totalCommands}*
-┃
-┗━━━━━━━━━━━━━━┛
+    // Build categories dynamically from whatever is actually registered
+    const rawMap = buildCategoryMap();
+    // Merge "main" and "menu" categories into a single "main" bucket
+    if (rawMap.menu) {
+        rawMap.main = [...(rawMap.main || []), ...rawMap.menu];
+        delete rawMap.menu;
+    }
+    const orderedKeys = orderedCategoryKeys(rawMap).filter(k => k !== 'menu');
 
-┏━❮ 📜 *𝗠𝗘𝗡𝗨 𝗦𝗘𝗖𝗧𝗜𝗢𝗡𝗦* ❯━┓
-┃ ➊  📥 Download Menu
-┃ ➋  👥 Group Menu
-┃ ➌  😄 Fun Menu
-┃ ➍  👑 Owner Menu
-┃ ➎  🤖 AI Menu
-┃ ➏  🎎 Anime Menu
-┃ ➐  🔄 Convert Menu
-┃ ➑  📌 Other Menu
-┃ ➒  💞 Reactions Menu
-┃ ➓  🏠 Main Menu
-┗━━━━━━━━━━━━━━┛
+    // Number each section 1..N based on what's actually present
+    const sectionList = orderedKeys.map((key, i) => ({
+        number: String(i + 1),
+        key,
+        meta: metaFor(key),
+        items: rawMap[key]
+    }));
 
-> *Reply with a number (1-10) to open a section*
+    const sectionLinesForOverview = sectionList
+        .map(s => `${s.number}. ${s.meta.emoji} ${s.meta.label} Menu`)
+        .join('\n');
 
-★ 𝐏𝐎𝐖𝐄𝐑𝐄𝐃 𝐁𝐘 *${creatorName}* ★`;
+    // ── Clean list style, no box-drawing ────────────────────────
+    const menuCaption = `*${botName}*
+
+Mode: *${mode}*
+Prefix: *${prefix}*
+Runtime: *${uptime}*
+Creator: *${creatorName}*
+Total Commands: *${totalCommands}*
+
+*MENU SECTIONS*
+${sectionLinesForOverview}
+
+Reply with a number (1-${sectionList.length}) to open a section.
+
+*Powered by ${creatorName}*`;
 
     const contextInfo = {
         mentionedJid: [m.sender],
@@ -118,296 +191,14 @@ const totalCommands = Object.keys(commands).length;
 
     const messageID = sentMsg.key.id;
 
-    // ── Each section, bold gold style, ALL commands included ────
-    const menuData = {
-        '1': {
-            title: `┏━❮ 📥 *𝗗𝗢𝗪𝗡𝗟𝗢𝗔𝗗 𝗠𝗘𝗡𝗨* ❯━┓
-┃
-┃ ➤ *facebook* [url]
-┃ ➤ *facebook2 / fb2* [url]
-┃ ➤ *download* [url]
-┃ ➤ *mediafire* [url]
-┃ ➤ *tiktok* [url]
-┃ ➤ *tiktoksearch* [query]
-┃ ➤ *tt2* [url]
-┃ ➤ *capcut* [url]
-┃ ➤ *twitter* [url]
-┃ ➤ *insta* [url]
-┃ ➤ *instagram2* [url]
-┃ ➤ *pinsearch / pins* [query]
-┃ ➤ *pinterest* [url]
-┃ ➤ *apk* [app]
-┃ ➤ *apk2* [app]
-┃ ➤ *img* [query]
-┃ ➤ *spotify* [query]
-┃ ➤ *play / song* [song]
-┃ ➤ *play2* [song]
-┃ ➤ *play2-10* [song]
-┃ ➤ *audio* [url]
-┃ ➤ *video* [url]
-┃ ➤ *video2-10* [url]
-┃ ➤ *ytmp3* [url]
-┃ ➤ *ytmp4* [url]
-┃ ➤ *ytthumb* [url/id]
-┃ ➤ *pair* [number]
-┃ ➤ *darama* [name]
-┃
-┗━━━━━━━━━━━━━━┛
-
-★ 𝐏𝐎𝐖𝐄𝐑𝐄𝐃 𝐁𝐘 *${creatorName}* ★`,
+    // Build each section's reply text dynamically too
+    const menuData = {};
+    for (const s of sectionList) {
+        menuData[s.number] = {
+            title: `${formatSection(s.key, s.items, prefix)}\n\n*Powered by ${creatorName}*`,
             image: true
-        },
-        '2': {
-            title: `┏━❮ 👥 *𝗚𝗥𝗢𝗨𝗣 𝗠𝗘𝗡𝗨* ❯━┓
-┃
-┃ ➤ *grouplink*
-┃ ➤ *kickall / kickall2 / kickall3*
-┃ ➤ *add* @user
-┃ ➤ *remove* @user
-┃ ➤ *kick* @user
-┃
-┃ ⚡ *𝗔𝗗𝗠𝗜𝗡 𝗧𝗢𝗢𝗟𝗦*
-┃ ➤ *promote* @user
-┃ ➤ *demote* @user
-┃ ➤ *dismiss*
-┃ ➤ *revoke*
-┃ ➤ *mute* [time] 20s/2m/1h
-┃ ➤ *unmute*
-┃ ➤ *copyg* [link]
-┃ ➤ *lockgc*
-┃ ➤ *unlockgc*
-┃
-┃ 🏷️ *𝗧𝗔𝗚𝗚𝗜𝗡𝗚*
-┃ ➤ *tag* @user
-┃ ➤ *hidetag* [msg]
-┃ ➤ *tagall*
-┃ ➤ *tagadmins*
-┃ ➤ *invite*
-┃
-┗━━━━━━━━━━━━━━┛
-
-★ 𝐏𝐎𝐖𝐄𝐑𝐄𝐃 𝐁𝐘 *${creatorName}* ★`,
-            image: true
-        },
-        '3': {
-            title: `┏━❮ 😄 *𝗙𝗨𝗡 𝗠𝗘𝗡𝗨* ❯━┓
-┃
-┃ ➤ *shapar*
-┃ ➤ *rate* @user
-┃ ➤ *insult* @user
-┃ ➤ *hack* @user
-┃ ➤ *ship* @user1 @user2
-┃ ➤ *character*
-┃ ➤ *pickup*
-┃ ➤ *joke*
-┃ ➤ *love*
-┃ ➤ *happy*
-┃ ➤ *sad*
-┃ ➤ *hot*
-┃ ➤ *heart*
-┃ ➤ *shy*
-┃ ➤ *beautiful*
-┃ ➤ *cunfuzed*
-┃ ➤ *mon*
-┃ ➤ *kiss*
-┃ ➤ *broke*
-┃ ➤ *hurt*
-┃ ➤ *fuck / fu*
-┃ ➤ *sassy / savage*
-┃ ➤ *goodmorning / gm*
-┃ ➤ *goodnight / gn*
-┃
-┗━━━━━━━━━━━━━━┛
-
-★ 𝐏𝐎𝐖𝐄𝐑𝐄𝐃 𝐁𝐘 *${creatorName}* ★`,
-            image: true
-        },
-        '4': {
-            title: `┏━❮ 👑 *𝗢𝗪𝗡𝗘𝗥 𝗠𝗘𝗡𝗨* ❯━┓
-┃
-┃ ➤ *block*
-┃ ➤ *unblock*
-┃ ➤ *fullpp*
-┃ ➤ *setpp*
-┃ ➤ *restart*
-┃ ➤ *shutdown*
-┃ ➤ *updatecmd*
-┃ ➤ *av2* [on/off/list]
-┃
-┃ ℹ️ *𝗜𝗡𝗙𝗢 𝗧𝗢𝗢𝗟𝗦*
-┃ ➤ *gjid*
-┃ ➤ *jid*
-┃ ➤ *listcmd*
-┃ ➤ *allmenu*
-┃
-┗━━━━━━━━━━━━━━┛
-
-★ 𝐏𝐎𝐖𝐄𝐑𝐄𝐃 𝐁𝐘 *${creatorName}* ★`,
-            image: true
-        },
-        '5': {
-            title: `┏━❮ 🤖 *𝗔𝗜 𝗠𝗘𝗡𝗨* ❯━┓
-┃
-┃ ➤ *ai* [query]
-┃ ➤ *gpt3* [query]
-┃ ➤ *gpt2* [query]
-┃ ➤ *gpt* [query]
-┃ ➤ *gptmini* [query]
-┃ ➤ *meta* [query]
-┃
-┃ 🎨 *𝗜𝗠𝗔𝗚𝗘 𝗔𝗜*
-┃ ➤ *imagine* [text]
-┃ ➤ *imagine2* [text]
-┃
-┃ 🔍 *𝗦𝗣𝗘𝗖𝗜𝗔𝗟𝗜𝗭𝗘𝗗*
-┃ ➤ *blackbox* [query]
-┃ ➤ *luma* [query]
-┃ ➤ *dj* [query]
-┃ ➤ *irfan* [query]
-┃
-┗━━━━━━━━━━━━━━┛
-
-★ 𝐏𝐎𝐖𝐄𝐑𝐄𝐃 𝐁𝐘 *${creatorName}* ★`,
-            image: true
-        },
-        '6': {
-            title: `┏━❮ 🎎 *𝗔𝗡𝗜𝗠𝗘 𝗠𝗘𝗡𝗨* ❯━┓
-┃
-┃ 🖼️ *𝗜𝗠𝗔𝗚𝗘𝗦*
-┃ ➤ *fack*
-┃ ➤ *dog*
-┃ ➤ *awoo*
-┃ ➤ *garl*
-┃ ➤ *waifu*
-┃ ➤ *neko*
-┃ ➤ *megnumin*
-┃ ➤ *maid*
-┃ ➤ *loli*
-┃ ➤ *anime* [keyword]
-┃ ➤ *animeboy*
-┃ ➤ *animegirl*
-┃ ➤ *animehd / anime4k*
-┃ ➤ *attitude*
-┃ ➤ *attitudegirl*
-┃ ➤ *attitudeboyreal*
-┃ ➤ *attitudegirlreal*
-┃
-┃ 🎬 *𝗩𝗜𝗗𝗘𝗢𝗦*
-┃ ➤ *animeboyvideo*
-┃ ➤ *animegirlvideo*
-┃
-┃ 🎭 *𝗖𝗛𝗔𝗥𝗔𝗖𝗧𝗘𝗥𝗦*
-┃ ➤ *animegirl1-5*
-┃ ➤ *anime1-5*
-┃ ➤ *foxgirl*
-┃ ➤ *naruto*
-┃
-┗━━━━━━━━━━━━━━┛
-
-★ 𝐏𝐎𝐖𝐄𝐑𝐄𝐃 𝐁𝐘 *${creatorName}* ★`,
-            image: true
-        },
-        '7': {
-            title: `┏━❮ 🔄 *𝗖𝗢𝗡𝗩𝗘𝗥𝗧 𝗠𝗘𝗡𝗨* ❯━┓
-┃
-┃ ➤ *sticker* [img]
-┃ ➤ *sticker2* [img]
-┃ ➤ *emojimix* 😎+😂
-┃ ➤ *take* [name,text]
-┃ ➤ *tomp3* [video]
-┃
-┃ 📝 *𝗧𝗘𝗫𝗧 𝗧𝗢𝗢𝗟𝗦*
-┃ ➤ *fancy* [text]
-┃ ➤ *tts* [text]
-┃ ➤ *trt* [text]
-┃ ➤ *base64* [text]
-┃ ➤ *unbase64* [text]
-┃
-┗━━━━━━━━━━━━━━┛
-
-★ 𝐏𝐎𝐖𝐄𝐑𝐄𝐃 𝐁𝐘 *${creatorName}* ★`,
-            image: true
-        },
-        '8': {
-            title: `┏━❮ 📌 *𝗢𝗧𝗛𝗘𝗥 𝗠𝗘𝗡𝗨* ❯━┓
-┃
-┃ ➤ *timenow*
-┃ ➤ *date*
-┃ ➤ *count* [num]
-┃ ➤ *calculate* [expr]
-┃ ➤ *countx*
-┃
-┃ 🎲 *𝗥𝗔𝗡𝗗𝗢𝗠*
-┃ ➤ *flip*
-┃ ➤ *coinflip*
-┃ ➤ *rcolor*
-┃ ➤ *roll*
-┃ ➤ *fact*
-┃
-┃ 🔎 *𝗦𝗘𝗔𝗥𝗖𝗛*
-┃ ➤ *define* [word]
-┃ ➤ *news* [query]
-┃ ➤ *movie* [name]
-┃ ➤ *weather* [loc]
-┃
-┗━━━━━━━━━━━━━━┛
-
-★ 𝐏𝐎𝐖𝐄𝐑𝐄𝐃 𝐁𝐘 *${creatorName}* ★`,
-            image: true
-        },
-        '9': {
-            title: `┏━❮ 💞 *𝗥𝗘𝗔𝗖𝗧𝗜𝗢𝗡𝗦 𝗠𝗘𝗡𝗨* ❯━┓
-┃
-┃ ❤️ *𝗔𝗙𝗙𝗘𝗖𝗧𝗜𝗢𝗡*
-┃ ➤ *cuddle* @user
-┃ ➤ *hug* @user
-┃ ➤ *kiss* @user
-┃ ➤ *lick* @user
-┃ ➤ *pat* @user
-┃
-┃ 😂 *𝗙𝗨𝗡𝗡𝗬*
-┃ ➤ *bully* @user
-┃ ➤ *bonk* @user
-┃ ➤ *yeet* @user
-┃ ➤ *slap* @user
-┃ ➤ *kill* @user
-┃
-┃ 😊 *𝗘𝗫𝗣𝗥𝗘𝗦𝗦𝗜𝗢𝗡𝗦*
-┃ ➤ *blush* @user
-┃ ➤ *smile* @user
-┃ ➤ *happy* @user
-┃ ➤ *wink* @user
-┃ ➤ *poke* @user
-┃
-┗━━━━━━━━━━━━━━┛
-
-★ 𝐏𝐎𝐖𝐄𝐑𝐄𝐃 𝐁𝐘 *${creatorName}* ★`,
-            image: true
-        },
-        '10': {
-            title: `┏━❮ 🏠 *𝗠𝗔𝗜𝗡 𝗠𝗘𝗡𝗨* ❯━┓
-┃
-┃ 🤖 *𝗕𝗢𝗧 𝗜𝗡𝗙𝗢*
-┃ ➤ *ping*
-┃ ➤ *live*
-┃ ➤ *alive*
-┃ ➤ *alive2*
-┃ ➤ *runtime*
-┃ ➤ *uptime*
-┃ ➤ *repo*
-┃ ➤ *owner*
-┃
-┃ 🛠️ *𝗕𝗢𝗧 𝗖𝗢𝗡𝗧𝗥𝗢𝗟𝗦*
-┃ ➤ *menu*
-┃ ➤ *menu2*
-┃ ➤ *restart*
-┃
-┗━━━━━━━━━━━━━━┛
-
-★ 𝐏𝐎𝐖𝐄𝐑𝐄𝐃 𝐁𝐘 *${creatorName}* ★`,
-            image: true
-        }
-    };
+        };
+    }
 
     const handler = async (msgData) => {
         try {
@@ -460,7 +251,7 @@ const totalCommands = Object.keys(commands).length;
                     await conn.sendMessage(
                         senderID,
                         {
-                            text: `❌ Invalid option! Please reply with a number between 1-10. Example: 1`
+                            text: `❌ Invalid option! Please reply with a number between 1-${sectionList.length}.`
                         },
                         { quoted: receivedMsg }
                     );
