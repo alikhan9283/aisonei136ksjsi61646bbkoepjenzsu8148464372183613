@@ -32,51 +32,48 @@ cmd({
 
     let searchResults = [];
 
-    // METHOD 1: Direct Delirius / Alternative TikTok Search API
+    // API METHOD 1: Widipe / Ayu-Tech TikTok API
     try {
-      const res1 = await axios.get(`https://deliriussapi-oficial.vercel.app/search/tiktok?query=${encodeURIComponent(query)}`, {
-        timeout: 20000
+      const res1 = await axios.get(`https://widipe.com/tiktoksearch?query=${encodeURIComponent(query)}`, {
+        timeout: 15000
       });
 
-      if (res1.data && res1.data.status && res1.data.data && res1.data.data.length > 0) {
-        searchResults = res1.data.data.map(v => ({
-          title: v.title || 'TikTok Video',
-          playUrl: v.meta ? v.meta.media[0].org : (v.no_watermark || v.nowm),
-          author: v.author ? v.author.nickname : 'TikTok User',
-          views: v.views || 0,
-          likes: v.like || 0
+      if (res1.data && res1.data.status && res1.data.result) {
+        const items = Array.isArray(res1.data.result) ? res1.data.result : (res1.data.result.videos || []);
+        searchResults = items.map(v => ({
+          title: v.title || v.caption || 'TikTok Video',
+          playUrl: v.play || v.no_watermark || v.wm || v.nowm,
+          author: v.author ? (v.author.nickname || v.author.unique_id) : 'TikTok User'
         }));
       }
     } catch (e1) {
-      console.log("Method 1 API failed, attempting Method 2...");
+      console.log("Widipe API failed, trying method 2...");
     }
 
-    // METHOD 2: Siputzx TikTok Search API Backup
+    // API METHOD 2: BK9 Active TikTok API
     if (searchResults.length === 0) {
       try {
-        const res2 = await axios.get(`https://api.siputzx.my.id/api/s/tiktok?query=${encodeURIComponent(query)}`, {
-          timeout: 20000
+        const res2 = await axios.get(`https://bk9.fun/search/tiktok?q=${encodeURIComponent(query)}`, {
+          timeout: 15000
         });
 
-        if (res2.data && res2.data.status && res2.data.data && res2.data.data.length > 0) {
-          searchResults = res2.data.data.map(v => ({
+        if (res2.data && res2.data.status && res2.data.BK9) {
+          searchResults = res2.data.BK9.map(v => ({
             title: v.title || 'TikTok Video',
-            playUrl: v.no_watermark || v.play || v.wm,
-            author: v.author ? v.author.nickname : 'TikTok User',
-            views: v.play_count || 0,
-            likes: v.digg_count || 0
+            playUrl: v.nowm || v.wm,
+            author: v.author ? v.author.nickname : 'TikTok User'
           }));
         }
       } catch (e2) {
-        console.log("Method 2 API failed.");
+        console.log("BK9 API failed.");
       }
     }
 
-    // Filter array to get valid video URLs
+    // Filter out invalid URLs
     searchResults = searchResults.filter(item => item.playUrl && item.playUrl.startsWith('http'));
 
     if (searchResults.length === 0) {
-      return reply("❌ Search API blocked by TikTok. Try again after a few seconds or try another query.");
+      return reply("❌ All TikTok search servers are currently down. Please try again after some time.");
     }
 
     const firstVideo = searchResults[0];
@@ -87,7 +84,7 @@ cmd({
       `*👤 Author:* ${firstVideo.author}\n\n` +
       `> *© ꜱᴇᴀʀᴄʜᴇᴅ ʙʏ ꜱᴀʀᴡᴀʀ-ᴍᴅ 🍸*`;
 
-    // Send Direct Video Buffer stream
+    // Send Video
     await client.sendMessage(message.chat, {
       video: { url: firstVideo.playUrl },
       caption: caption
