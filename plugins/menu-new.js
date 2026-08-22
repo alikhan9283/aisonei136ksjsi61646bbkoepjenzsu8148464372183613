@@ -1,157 +1,651 @@
-const { cmd, commands } = require("../command");
-const config = require("../config");
-const path = require("path");
-const fs = require("fs");
-const axios = require("axios");
-const { runtime } = require("../lib/functions");
-
-// Helper function for small caps text
-const toSmallCaps = (text) => {
-    if (!text || typeof text !== "string") return "";
-    const smallCapsMap = {
-        a: "ᴀ", b: "ʙ", c: "ᴄ", d: "ᴅ", e: "ᴇ", f: "ғ", g: "ɢ", h: "ʜ", i: "ɪ",
-        j: "ᴊ", k: "ᴋ", l: "ʟ", m: "ᴍ", n: "ɴ", o: "ᴏ", p: "ᴘ", q: "ǫ", r: "ʀ",
-        s: "s", t: "ᴛ", u: "ᴜ", v: "ᴠ", w: "ᴡ", x: "x", y: "ʏ", z: "ᴢ",
-        A: "ᴀ", B: "ʙ", C: "ᴄ", D: "ᴅ", E: "ᴇ", F: "ғ", G: "ɢ", H: "ʜ", I: "ɪ",
-        J: "ᴊ", K: "ᴋ", L: "ʟ", M: "ᴍ", N: "ɴ", O: "ᴏ", P: "ᴘ", Q: "ǫ", R: "ʀ",
-        S: "s", T: "ᴛ", U: "ᴜ", V: "ᴠ", W: "ᴡ", X: "x", Y: "ʏ", Z: "ᴢ",
-    };
-    return text.split("").map((char) => smallCapsMap[char] || char).join("");
-};
-
-// Format category with sidebar design
-const formatCategory = (category, cmds) => {
-    const validCmds = cmds.filter((c) => c.pattern && c.pattern.trim() !== "");
-    if (validCmds.length === 0) return "";
-
-    let title = `\n▰▰▰❰ ${toSmallCaps(category.toUpperCase())} ❱▰▰▰\n║\n`;
-    let body = validCmds
-        .map((c) => `➤ ─ ${toSmallCaps(c.pattern || "")}`)
-        .join("\n");
-    let footer = `\n➤\n▰▰▰▰▰▰▰▰▰▰▰▰▰`;
-    return `${title}${body}${footer}`;
-};
-
-// Validate and fetch a remote menu image, falling back gracefully if it
-// isn't reachable or isn't actually an image.
-const validateAndFetchImage = async (url) => {
-    if (!url || typeof url !== "string" || url.trim() === "") {
-        return { valid: false };
-    }
-    try {
-        const urlPattern = /^https?:\/\/.+/i;
-        if (!urlPattern.test(url.trim())) return { valid: false };
-
-        const response = await axios.get(url, {
-            timeout: 10000,
-            maxRedirects: 5,
-            responseType: "arraybuffer",
-            headers: {
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-                Accept: "image/*,*/*",
-            },
-            validateStatus: (status) => status < 400,
-        });
-
-        const contentType = response.headers["content-type"];
-        if (contentType && contentType.startsWith("image/")) {
-            return { valid: true, buffer: Buffer.from(response.data), contentType };
-        }
-        return { valid: false };
-    } catch (error) {
-        console.log("Image validation failed:", error.message);
-        return { valid: false };
-    }
-};
+const fs = require('fs');
+const config = require('../config');
+const { cmd, commands } = require('../command');
+const { runtime } = require('../lib/functions');
+const axios = require('axios');
+const path = require('path');
+const converter = require('../data/converter');
 
 cmd({
-    pattern: "menu",
-    alias: ["m", "help", "allmenu", "fullmenu"],
-    use: ".menu",
-    desc: "Show all bot commands",
-    category: "main",
-    react: "⚡",
-    filename: __filename,
-}, async (client, message, match, { from, reply }) => {
-    try {
-        await client.sendPresenceUpdate("composing", message.chat);
+pattern: "menu",
+desc: "Show interactive menu system",
+category: "menu",
+react: "🧾",
+filename: __filename
+}, async (conn, mek, m, { from, reply, isOwner }) => {
+try {
 
-        const totalCommands = Object.keys(commands).length;
+const totalCommands = Object.keys(commands).length;  
 
-        const categories = [...new Set(Object.values(commands).map((c) => c.category))].filter(
-            (cat) => cat && cat.trim() !== "" && cat !== "undefined"
-        );
+    const botName = config.BOT_NAME || "SARWAR-MD";  
+    const mode = config.MODE || "public";  
+    const prefix = config.PREFIX || ".";  
+    const creatorName = "SARWAR-MD";  
+    const uptime = runtime(process.uptime());  
+      
+    const menuCaption = `╭━━━〔 👤 *${botName}* 〕━━━┈⊷
 
-        const categorized = {};
-        categories.forEach((cat) => {
-            const categoryCommands = Object.values(commands).filter((c) => c.category === cat);
-            const validCommands = categoryCommands.filter((c) => c.pattern && c.pattern.trim() !== "");
-            if (validCommands.length > 0) categorized[cat] = validCommands;
-        });
+┃ ❍ Mode » [${mode}]
+┃ ❍ Prefix » [${prefix}]
+┃ ❍ Runtime » ${uptime}
+┃ ❍ Creater » ${creatorName}
+┃ ❍ Commands » ${totalCommands}
+╰━━━━━━━━━━━━━━━━┈⊷
 
-        let menuSections = "";
-        for (const [category, cmds] of Object.entries(categorized)) {
-            if (cmds && cmds.length > 0) {
-                const section = formatCategory(category, cmds);
-                if (section !== "") menuSections += section;
-            }
-        }
+╭━━━〔 📜 MENU SECTIONS 〕
+┃ ❍ 1️⃣  📥 Download Menu
+┃ ❍ 2️⃣  👥 Group Menu
+┃ ❍ 3️⃣  😄 Fun Menu
+┃ ❍ 4️⃣  👑 Owner Menu
+┃ ❍ 5️⃣  🤖 AI Menu
+┃ ❍ 6️⃣  🎎 Anime Menu
+┃ ❍ 7️⃣  🔄 Convert Menu
+┃ ❍ 8️⃣  📌 Other Menu
+┃ ❍ 9️⃣  💞 Reactions Menu
+┃ ❍ 🔟  🏠 Main Menu
+╰━━━━━━━━━━━━━━━━┈⊷
 
-        const BOT_NAME = config.BOT_NAME || "SARWAR-MD";
-        const OWNER_NAME = config.OWNER_NAME || "Owner";
-        const PREFIX = config.PREFIX || ".";
-        const MODE = config.MODE || "private";
-        const VERSION = config.VERSION || "1.0.0";
-        const DESCRIPTION = config.DESCRIPTION || "";
-        const BOT_IMAGE = config.BOT_IMAGE || config.BOT_MEDIA_URL;
+╭━━━〔 📥 DOWNLOAD MENU 〕
+┃ ❍ facebook [url]
+┃ ❍ download [url]
+┃ ❍ mediafire [url]
+┃ ❍ tiktok [url]
+┃ ❍ capcut [url]
+┃ ❍ twitter [url]
+┃ ❍ insta [url]
+┃ ❍ apk [app]
+┃ ❍ img [query]
+┃ ❍ tt2 [url]
+┃ ❍ pins [url]
+┃ ❍ apk2 [app]
+┃ ❍ fb2 [url]
+┃ ❍ pinterest [url]
+┃ ❍ spotify [query]
+┃ ❍ play [song]
+┃ ❍ play2-10 [song]
+┃ ❍ audio [url]
+┃ ❍ video [url]
+┃ ❍ video2-10 [url]
+┃ ❍ ytmp3 [url]
+┃ ❍ ytmp4 [url]
+┃ ❍ song [name]
+┃ ❍ darama [name]
+╰━━━━━━━━━━━━━━━━┈⊷
 
-        const dec = `▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰
-➤  ${BOT_NAME}
-▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰
+╭━━━〔 👥 GROUP MENU 〕
+┃ ❍ 🛠️ MANAGEMENT
+┃ ❍ grouplink
+┃ ❍ kickall
+┃ ❍ kickall2
+┃ ❍ kickall3
+┃ ❍ add @user
+┃ ❍ remove @user
+┃ ❍ kick @user
+┃ 〔⚡ ADMIN TOOLS〕
+┃ ❍ promote @user
+┃ ❍ demote @user
+┃ ❍ dismiss
+┃ ❍ revoke
+┃ ❍ mute [time] 20s 2m 1h
+┃ ❍ unmute
+┃ ❍ copyg [link]
+┃ ❍ lockgc
+┃ ❍ unlockgc
+┃ 〔🏷️ TAGGING〕
+┃ ❍ tag @user
+┃ ❍ hidetag [msg]
+┃ ❍ tagall
+┃ ❍ tagadmins
+┃ ❍ invite
+╰━━━━━━━━━━━━━━━━┈⊷
 
-▰▰▰❰ 🤖 ʙᴏᴛ ɪɴғᴏ ❱▰▰▰
-➤ 👑 ${toSmallCaps("Owner")}: ${OWNER_NAME}
-➤ 📜 ${toSmallCaps("Commands")}: ${totalCommands}
-➤ ⏱️ ${toSmallCaps("Runtime")}: ${runtime(process.uptime())}
-➤ 📦 ${toSmallCaps("Prefix")}: ${PREFIX}
-➤ ⚙️ ${toSmallCaps("Mode")}: ${MODE}
-➤ 🏷️ ${toSmallCaps("Version")}: ${VERSION}
-▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰
-${menuSections}
+╭━━━〔 😄 FUN MENU 〕
+┃ ❍ shapar
+┃ ❍ rate @user
+┃ ❍ insult @user
+┃ ❍ hack @user
+┃ ❍ ship @user1 @user2
+┃ ❍ character
+┃ ❍ pickup
+┃ ❍ joke
+┃ ❍ love
+┃ ❍ happy
+┃ ❍ sad
+┃ ❍ hot
+┃ ❍ heart
+┃ ❍ shy
+┃ ❍ beautiful
+┃ ❍ cunfuzed
+┃ ❍ mon
+┃ ❍ kiss
+┃ ❍ broke
+┃ ❍ hurt
+╰━━━━━━━━━━━━━━━━┈⊷
 
-> ${DESCRIPTION || ""}`;
+╭━━━〔 👑 OWNER MENU 〕
+┃ ❍ block
+┃ ❍ unblock
+┃ ❍ fullpp
+┃ ❍ setpp
+┃ ❍ restart
+┃ ❍ shutdown
+┃ ❍ updatecmd
+┃ 〔 ℹ️ INFO TOOLS 〕
+┃ ❍ gjid
+┃ ❍ jid
+┃ ❍ listcmd
+┃ ❍ allmenu
+╰━━━━━━━━━━━━━━━━┈⊷
 
-        const contextInfo = {
-            mentionedJid: [message.sender],
-            forwardingScore: 999,
-            isForwarded: true,
-            forwardedNewsletterMessageInfo: {
-                newsletterJid: "120363407310860031@newsletter",
-                newsletterName: BOT_NAME,
-                serverMessageId: 143,
-            },
-        };
+╭━━━〔 🤖 AI MENU 〕
+┃ ❍ ai [query]
+┃ ❍ gpt3 [query]
+┃ ❍ gpt2 [query]
+┃ ❍ gpt [query]
+┃ ❍ gptmini [query]
+┃ ❍ meta [query]
+┃ 〔 🎨 IMAGE AI 〕
+┃ ❍ imagine [text]
+┃ ❍ imagine2 [text]
+┃ 〔 🔍 SPECIALIZED 〕
+┃ ❍ blackbox [query]
+┃ ❍ luma [query]
+┃ ❍ dj [query]
+┃ ❍ irfan [query]
+╰━━━━━━━━━━━━━━━━┈⊷
 
-        let imageToSend;
-        const localImagePath = path.join(__dirname, "../lib/ERFAN.jpg");
+╭━━━〔 🎎 ANIME MENU 〕
+┃ ❍ 🖼️ IMAGES
+┃ ❍ fack
+┃ ❍ dog
+┃ ❍ awoo
+┃ ❍ garl
+┃ ❍ waifu
+┃ ❍ neko
+┃ ❍ megnumin
+┃ ❍ maid
+┃ ❍ loli
+┃ 〔 🎭 CHARACTERS 〕
+┃ ❍ animegirl
+┃ ❍ animegirl1-5
+┃ ❍ anime1-5
+┃ ❍ foxgirl
+┃ ❍ naruto
+╰━━━━━━━━━━━━━━━━┈⊷
 
-        const imageValidation = await validateAndFetchImage(BOT_IMAGE);
+╭━━━〔 🔄 CONVERT MENU 〕
+┃ ❍ sticker [img]
+┃ ❍ sticker2 [img]
+┃ ❍ emojimix 😎+😂
+┃ ❍ take [name,text]
+┃ ❍ tomp3 [video]
+┃ 〔📝 TEXT TOOLS 〕
+┃ ❍ fancy [text]
+┃ ❍ tts [text]
+┃ ❍ trt [text]
+┃ ❍ base64 [text]
+┃ ❍ unbase64 [text]
+╰━━━━━━━━━━━━━━━━┈⊷
 
-        if (imageValidation.valid) {
-            imageToSend = imageValidation.buffer;
-        } else if (fs.existsSync(localImagePath)) {
-            imageToSend = fs.readFileSync(localImagePath);
-        } else {
-            return await client.sendMessage(message.chat, { text: dec, contextInfo }, { quoted: message });
-        }
+╭━━━〔 📌 OTHER MENU 〕
+┃ ❍ timenow
+┃ ❍ date
+┃ ❍ count [num]
+┃ ❍ calculate [expr]
+┃ ❍ countx
+┃ 〔 🎲 RANDOM 〕
+┃ ❍ flip
+┃ ❍ coinflip
+┃ ❍ rcolor
+┃ ❍ roll
+┃ ❍ fact
+┃ 〔 🔎 SEARCH 〕
+┃ ❍ define [word]
+┃ ❍ news [query]
+┃ ❍ movie [name]
+┃ ❍ weather [loc]
+╰━━━━━━━━━━━━━━━━┈⊷
 
-        await client.sendMessage(
-            message.chat,
-            { image: imageToSend, caption: dec, contextInfo },
-            { quoted: message }
-        );
-    } catch (e) {
-        console.log(e);
-        reply(`Error: ${e}`);
-    }
+╭━━━〔 💞 REACTIONS MENU 〕
+┃ ❍ ❤️ AFFECTION
+┃ ❍ cuddle @user
+┃ ❍ hug @user
+┃ ❍ kiss @user
+┃ ❍ lick @user
+┃ ❍ pat @user
+┃ 〔 😂 FUNNY 〕
+┃ ❍ bully @user
+┃ ❍ bonk @user
+┃ ❍ yeet @user
+┃ ❍ slap @user
+┃ ❍ kill @user
+┃ 〔 😊 EXPRESSIONS 〕
+┃ ❍ blush @user
+┃ ❍ smile @user
+┃ ❍ happy @user
+┃ ❍ wink @user
+┃ ❍ poke @user
+╰━━━━━━━━━━━━━━━━┈⊷
+
+╭━━━〔 🏠 MAIN MENU 〕
+┃
+┃ ❍ 🤖 BOT INFO
+┃ ❍ ping
+┃ ❍ live
+┃ ❍ alive
+┃ ❍ runtime
+┃ ❍ uptime
+┃ ❍ repo
+┃ ❍ owner
+┃ 〔 🛠️ BOT CONTROLS 〕
+┃ ❍ menu
+┃ ❍ menu2
+┃ ❍ restart
+┃
+╰━━━━━━━━━━━━━━━━┈⊷
+
+> 𝐂𝐑𝐄𝐀𝐓𝐄𝐑: ${creatorName}`;
+
+
+
+const contextInfo = {  
+        mentionedJid: [m.sender],  
+        forwardingScore: 999,  
+        isForwarded: true,  
+        forwardedNewsletterMessageInfo: {  
+            newsletterJid: '120363407310860031@newsletter',  
+            newsletterName: creatorName,  
+            serverMessageId: 143  
+        }  
+    };  
+
+    const sendMenuImage = async () => {  
+        try {  
+            return await conn.sendMessage(  
+                from,  
+                {  
+                    image: { url: config.MENU_IMAGE_URL || 'https://i.ibb.co/cKZNpnR9/MOON-MD.jpg' },  
+                    caption: menuCaption,  
+                    contextInfo: contextInfo  
+                },  
+                { quoted: mek }  
+            );  
+        } catch (e) {  
+            console.log('Image send failed, falling back to text');  
+            return await conn.sendMessage(  
+                from,  
+                { text: menuCaption, contextInfo: contextInfo },  
+                { quoted: mek }  
+            );  
+        }  
+    };  
+
+    let sentMsg;  
+    try {  
+        sentMsg = await Promise.race([  
+            sendMenuImage(),  
+            new Promise((_, reject) => setTimeout(() => reject(new Error('Image send timeout')), 10000))  
+        ]);  
+    } catch (e) {  
+        console.log('Menu send error:', e);  
+        sentMsg = await conn.sendMessage(  
+            from,  
+            { text: menuCaption, contextInfo: contextInfo },  
+            { quoted: mek }  
+        );  
+    }  
+
+    try {  
+        const audioPath = path.join(__dirname, '../assets/menu-new.m4a');  
+        if (fs.existsSync(audioPath)) {  
+            const buffer = fs.readFileSync(audioPath);  
+            const ptt = await converter.toPTT(buffer, 'm4a');  
+
+            await conn.sendMessage(from, {  
+                audio: ptt,  
+                mimetype: 'audio/ogg; codecs=opus',  
+                ptt: true,  
+            }, { quoted: mek });  
+        } else {  
+            console.error('menu-new.m4a not found in assets folder');  
+        }  
+    } catch (audioError) {  
+        console.log('Audio send error:', audioError);  
+    }  
+      
+    const messageID = sentMsg.key.id;  
+
+    const menuData = {  
+        '1': {  
+            title: `╭━━━〔 📥 *DOWNLOAD MENU* 〕━━━┈⊷
+
+┃ ❍ facebook [url]
+┃ ❍ download [url]
+┃ ❍ mediafire [url]
+┃ ❍ tiktok [url]
+┃ ❍ capcut [url]
+┃ ❍ twitter [url]
+┃ ❍ insta [url]
+┃ ❍ apk [app]
+┃ ❍ img [query]
+┃ ❍ tt2 [url]
+┃ ❍ pins [url]
+┃ ❍ apk2 [app]
+┃ ❍ fb2 [url]
+┃ ❍ pinterest [url]
+┃ ❍ spotify [query]
+┃ ❍ play [song]
+┃ ❍ play2-10 [song]
+┃ ❍ audio [url]
+┃ ❍ video [url]
+┃ ❍ video2-10 [url]
+┃ ❍ ytmp3 [url]
+┃ ❍ ytmp4 [url]
+┃ ❍ song [name]
+┃ ❍ darama [name]
+╰━━━━━━━━━━━━━━━━┈⊷
+
+> 𝐂𝐑𝐄𝐀𝐓𝐄𝐑: ${creatorName}`,
+            image: true   
+        },  
+        '2': {   
+            title: `╭━━━〔 👥 *GROUP MENU* 〕━━━┈⊷
+
+┃ ❍ grouplink
+┃ ❍ kickall
+┃ ❍ kickall2
+┃ ❍ kickall3
+┃ ❍ add @user
+┃ ❍ remove @user
+┃ ❍ kick @user
+┃ ─〔⚡ ADMIN TOOLS〕
+┃ ❍ promote @user
+┃ ❍ demote @user
+┃ ❍ dismiss
+┃ ❍ revoke
+┃ ❍ mute [time] 20s 2m 1h
+┃ ❍ unmute
+┃ ❍ copyg [link]
+┃ ❍ lockgc
+┃ ❍ unlockgc
+┃ ─〔🏷️ TAGGING〕
+┃ ❍ tag @user
+┃ ❍ hidetag [msg]
+┃ ❍ tagall
+┃ ❍ tagadmins
+┃ ❍ invite
+╰━━━━━━━━━━━━━━━━┈⊷
+
+> 𝐂𝐑𝐄𝐀𝐓𝐄𝐑: ${creatorName}`,
+            image: true   
+        },  
+        '3': {   
+            title: `╭━━━〔 😄 *FUN MENU* 〕━━━┈⊷
+
+┃ ❍ shapar
+┃ ❍ rate @user
+┃ ❍ insult @user
+┃ ❍ hack @user
+┃ ❍ ship @user1 @user2
+┃ ❍ character
+┃ ❍ pickup
+┃ ❍ joke
+┃ ❍ love
+┃ ❍ happy
+┃ ❍ sad
+┃ ❍ hot
+┃ ❍ heart
+┃ ❍ shy
+┃ ❍ beautiful
+┃ ❍ cunfuzed
+┃ ❍ mon
+┃ ❍ kiss
+┃ ❍ broke
+┃ ❍ hurt
+╰━━━━━━━━━━━━━━━━┈⊷
+
+> 𝐂𝐑𝐄𝐀𝐓𝐄𝐑: ${creatorName}`,
+            image: true   
+        },  
+        '4': {   
+            title: `╭━━━〔 👑 *OWNER MENU* 〕━━━┈⊷
+
+┃ ❍ block
+┃ ❍ unblock
+┃ ❍ fullpp
+┃ ❍ setpp
+┃ ❍ restart
+┃ ❍ shutdown
+┃ ❍ updatecmd
+┃ ─〔ℹ️ INFO TOOLS〕
+┃ ❍ gjid
+┃ ❍ jid
+┃ ❍ listcmd
+┃ ❍ allmenu
+╰━━━━━━━━━━━━━━━━┈⊷
+
+> 𝐂𝐑𝐄𝐀𝐓𝐄𝐑: ${creatorName}`,
+            image: true   
+        },  
+        '5': {   
+            title: `╭━━━〔 🤖 *AI MENU* 〕━━━┈⊷
+
+┃ ❍ ai [query]
+┃ ❍ gpt3 [query]
+┃ ❍ gpt2 [query]
+┃ ❍ gpt [query]
+┃ ❍ gptmini [query]
+┃ ❍ meta [query]
+┃ ─〔🎨 IMAGE AI〕
+┃ ❍ imagine [text]
+┃ ❍ imagine2 [text]
+┃ ─〔🔍 SPECIALIZED〕
+┃ ❍ blackbox [query]
+┃ ❍ luma [query]
+┃ ❍ dj [query]
+┃ ❍ irfan [query]
+╰━━━━━━━━━━━━━━━━┈⊷
+
+> 𝐂𝐑𝐄𝐀𝐓𝐄𝐑: ${creatorName}`,
+            image: true   
+        },  
+        '6': {   
+            title: `╭━━━〔 🎎 *ANIME MENU* 〕━━━┈⊷
+
+┃ ❍ fack
+┃ ❍ dog
+┃ ❍ awoo
+┃ ❍ garl
+┃ ❍ waifu
+┃ ❍ neko
+┃ ❍ megnumin
+┃ ❍ maid
+┃ ❍ loli
+┃ ─〔🎭 CHARACTERS〕
+┃ ❍ animegirl
+┃ ❍ animegirl1-5
+┃ ❍ anime1-5
+┃ ❍ foxgirl
+┃ ❍ naruto
+╰━━━━━━━━━━━━━━━━┈⊷
+
+> 𝐂𝐑𝐄𝐀𝐓𝐄𝐑: ${creatorName}`,
+            image: true   
+        },  
+        '7': {   
+            title: `╭━━━〔 🔄 *CONVERT MENU* 〕━━━┈⊷
+
+┃ ❍ sticker [img]
+┃ ❍ sticker2 [img]
+┃ ❍ emojimix 😎+😂
+┃ ❍ take [name,text]
+┃ ❍ tomp3 [video]
+┃ ─〔📝 TEXT TOOLS〕
+┃ ❍ fancy [text]
+┃ ❍ tts [text]
+┃ ❍ trt [text]
+┃ ❍ base64 [text]
+┃ ❍ unbase64 [text]
+╰━━━━━━━━━━━━━━━━┈⊷
+
+> 𝐂𝐑𝐄𝐀𝐓𝐄𝐑: ${creatorName}`,
+            image: true   
+        },  
+        '8': {   
+            title: `╭━━━〔 📌 *OTHER MENU* 〕━━━┈⊷
+
+┃ ❍ timenow
+┃ ❍ date
+┃ ❍ count [num]
+┃ ❍ calculate [expr]
+┃ ❍ countx
+┃ ─〔🎲 RANDOM〕
+┃ ❍ flip
+┃ ❍ coinflip
+┃ ❍ rcolor
+┃ ❍ roll
+┃ ❍ fact
+┃ ─〔🔎 SEARCH〕
+┃ ❍ define [word]
+┃ ❍ news [query]
+┃ ❍ movie [name]
+┃ ❍ weather [loc]
+╰━━━━━━━━━━━━━━━━┈⊷
+
+> 𝐂𝐑𝐄𝐀𝐓𝐄𝐑: ${creatorName}`,
+            image: true   
+        },  
+        '9': {   
+            title: `╭━━━〔 💞 *REACTIONS MENU* 〕━━━┈⊷
+
+┃ ❍ ❤️ AFFECTION
+┃ ❍ cuddle @user
+┃ ❍ hug @user
+┃ ❍ kiss @user
+┃ ❍ lick @user
+┃ ❍ pat @user
+┃ ─〔😂 FUNNY〕
+┃ ❍ bully @user
+┃ ❍ bonk @user
+┃ ❍ yeet @user
+┃ ❍ slap @user
+┃ ❍ kill @user
+┃ ─〔😊 EXPRESSIONS〕
+┃ ❍ blush @user
+┃ ❍ smile @user
+┃ ❍ happy @user
+┃ ❍ wink @user
+┃ ❍ poke @user
+╰━━━━━━━━━━━━━━━━┈⊷
+
+> 𝐂𝐑𝐄𝐀𝐓𝐄𝐑: ${creatorName}`,
+            image: true   
+        },  
+        '10': {   
+            title: `╭━━━〔 🏠 *MAIN MENU* 〕━━━┈⊷
+
+┃ ❍ 🤖 BOT INFO
+┃ ❍ ping
+┃ ❍ live
+┃ ❍ alive
+┃ ❍ runtime
+┃ ❍ uptime
+┃ ❍ repo
+┃ ❍ owner
+┃ ─〔🛠️ BOT CONTROLS〕
+┃ ❍ menu
+┃ ❍ menu2
+┃ ❍ restart
+╰━━━━━━━━━━━━━━━━┈⊷
+
+> 𝐂𝐑𝐄𝐀𝐓𝐄𝐑: ${creatorName}`,
+            image: true   
+        }  
+    };
+
+
+
+const handler = async (msgData) => {  
+        try {  
+            const receivedMsg = msgData.messages[0];  
+            if (!receivedMsg?.message || !receivedMsg.key?.remoteJid) return;  
+
+            const isReplyToMenu = receivedMsg.message.extendedTextMessage?.contextInfo?.stanzaId === messageID;  
+              
+            if (isReplyToMenu) {  
+                const receivedText = receivedMsg.message.conversation ||   
+                                  receivedMsg.message.extendedTextMessage?.text;  
+                const senderID = receivedMsg.key.remoteJid;  
+
+                if (menuData[receivedText]) {  
+                    const selectedMenu = menuData[receivedText];  
+                      
+                    try {  
+                        if (selectedMenu.image) {  
+                            await conn.sendMessage(  
+                                senderID,  
+                                {  
+                                    image: { url: config.MENU_IMAGE_URL || 'https://files.catbox.moe/zc57w6.jpg' },  
+                                    caption: selectedMenu.title,  
+                                    contextInfo: contextInfo  
+                                },  
+                                { quoted: receivedMsg }  
+                            );  
+                        } else {  
+                            await conn.sendMessage(  
+                                senderID,  
+                                { text: selectedMenu.title, contextInfo: contextInfo },  
+                                { quoted: receivedMsg }  
+                            );  
+                        }  
+
+                        await conn.sendMessage(senderID, {  
+                            react: { text: '✅', key: receivedMsg.key }  
+                        });  
+
+                    } catch (e) {  
+                        console.log('Menu reply error:', e);  
+                        await conn.sendMessage(  
+                            senderID,  
+                            { text: selectedMenu.title, contextInfo: contextInfo },  
+                            { quoted: receivedMsg }  
+                        );  
+                    }  
+
+                } else {  
+                    await conn.sendMessage(  
+                        senderID,  
+                        {  
+                            text: `❌ Invalid option! Please reply with a number between 1-10. Example: 1`  
+                        },  
+                        { quoted: receivedMsg }  
+                    );  
+                }  
+            }  
+        } catch (e) {  
+            console.log('Handler error:', e);  
+        }  
+    };  
+
+    conn.ev.on("messages.upsert", handler);  
+
+    setTimeout(() => {  
+        conn.ev.off("messages.upsert", handler);  
+    }, 300000);  
+
+} catch (e) {  
+    console.error('Menu Error:', e);  
+    try {  
+        await conn.sendMessage(  
+            from,  
+            {   
+                text: `❌ Menu system is busy. Please try again later.`  
+            },  
+            { quoted: mek }  
+        );  
+    } catch (finalError) {  
+        console.log('Final error handling failed:', finalError);  
+    }  
+}
+
 });
