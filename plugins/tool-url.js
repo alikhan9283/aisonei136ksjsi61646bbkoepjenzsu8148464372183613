@@ -1,5 +1,7 @@
 const axios = require("axios");
 const FormData = require('form-data');
+const fs = require('fs');
+const os = require('os');
 const path = require("path");
 const { cmd } = require("../command");
 const { sendButtons } = require('gifted-btns');
@@ -8,33 +10,27 @@ cmd({
   'pattern': "tourl",
   'alias': ["imgtourl", "imgurl", "url", "geturl", "upload"],
   'react': '🖇',
-  'desc': "Convert image, video, audio & docs to Catbox URL",
+  'desc': "Convert media to Catbox URL via Adeel-Xtech API",
   'category': "utility",
   'use': ".tourl [reply to media]",
   'filename': __filename
 }, async (client, message, match, { reply }) => {
+  let tempFilePath = null;
   try {
-    // 1. Quoted Message & Handler Check
     const quotedMsg = message.quoted ? message.quoted : message;
-    if (!quotedMsg) {
-      return reply("🍁 Please reply to an image, video, audio, or document message.");
-    }
-
-    // Media Object resolution
     const msgObj = quotedMsg.msg || quotedMsg;
     const mimeType = msgObj.mimetype || quotedMsg.mimetype || '';
 
     if (!mimeType) {
-      return reply("🍁 Invalid media type. Please reply to a valid image, video, audio, or document.");
+      return reply("🍁 Please reply to an image, video, audio, or document message.");
     }
 
-    // 2. Download Buffer
     const mediaBuffer = await quotedMsg.download();
     if (!mediaBuffer || mediaBuffer.length === 0) {
-      return reply("❌ Failed to download media. Please try again.");
+      throw new Error("Failed to download media buffer");
     }
 
-    // 3. Extension & Filename handling
+    // Original file name & extension check
     const rawFileName = msgObj.fileName || msgObj.filename || '';
     let extension = path.extname(rawFileName) || '';
 
@@ -50,98 +46,45 @@ cmd({
       else if (mimeType.includes('audio/mp4') || mimeType.includes('audio/x-m4a')) extension = '.m4a';
       else if (mimeType.includes('audio/wav')) extension = '.wav';
       else if (mimeType.includes('pdf')) extension = '.pdf';
-      else if (mimeType.includes('wordprocessingml')) extension = '.docx';
-      else if (mimeType.includes('spreadsheetml')) extension = '.xlsx';
+      else if (mimeType.includes('wordprocessingml') || mimeType.includes('msword')) extension = '.docx';
+      else if (mimeType.includes('spreadsheetml') || mimeType.includes('excel')) extension = '.xlsx';
+      else if (mimeType.includes('presentationml') || mimeType.includes('powerpoint')) extension = '.pptx';
       else if (mimeType.includes('zip')) extension = '.zip';
+      else if (mimeType.includes('rar')) extension = '.rar';
       else extension = '.bin';
     }
 
-    const fileName = rawFileName || `file_${Date.now()}${extension}`;
-    let mediaUrl = "";
+    const fileName = rawFileName || `upload_${Date.now()}${extension}`;
+    tempFilePath = path.join(os.tmpdir(), fileName);
+    fs.writeFileSync(tempFilePath, mediaBuffer);
 
-    // LOGIC 1: Direct Catbox Upload (Cloudflare 412 Bypass Stream)
-    try {
-      const form1 = new FormData();
-      form1.append('reqtype', 'fileupload');
-      form1.append('fileToUpload', mediaBuffer, {
-        filename: fileName,
-        contentType: mimeType
-      });
+    // Form submission to Adeel-Xtech Endpoint
+    const form = new FormData();
+    form.append('file', fs.createReadStream(tempFilePath), fileName);
 
-      const res1 = await axios.post('https://catbox.moe/user/api.php', form1, {
-        headers: {
-          ...form1.getHeaders(),
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
-          'Origin': 'https://catbox.moe',
-          'Referer': 'https://catbox.moe/'
-        },
-        timeout: 60000
-      });
+    const apiResponse = await axios.post('https://adeel-xtech-apis.vercel.app/api/imgtourl', form, {
+      headers: {
+        ...form.getHeaders(),
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+      },
+      timeout: 90000,
+      maxContentLength: Infinity,
+      maxBodyLength: Infinity
+    });
 
-      if (res1.data && typeof res1.data === 'string' && res1.data.startsWith('http')) {
-        mediaUrl = res1.data.trim();
-      }
-    } catch (e1) {
-      console.log("Catbox direct upload failed, switching to backup logic...");
+    // Cleanup local temp file
+    if (tempFilePath && fs.existsSync(tempFilePath)) {
+      fs.unlinkSync(tempFilePath);
+      tempFilePath = null;
     }
 
-    // LOGIC 2: Alternate Catbox Host via Proxy / Adeel-Xtech Bridge
-    if (!mediaUrl) {
-      try {
-        const form2 = new FormData();
-        form2.append('file', mediaBuffer, {
-          filename: fileName,
-          contentType: mimeType
-        });
-
-        const res2 = await axios.post('https://catbox.moe/user/api.php', form2, {
-          headers: {
-            ...form2.getHeaders(),
-            'User-Agent': 'PostmanRuntime/7.32.3'
-          }
-        });
-
-        if (res2.data && typeof res2.data === 'string' && res2.data.startsWith('http')) {
-          mediaUrl = res2.data.trim();
-        }
-      } catch (e2) {
-        console.log("Backup Catbox upload failed.");
-      }
+    if (!apiResponse.data || apiResponse.data.status !== true || !apiResponse.data.result || !apiResponse.data.result.url) {
+      throw new Error("Adeel-Xtech API failed to return a valid URL");
     }
 
-    // LOGIC 3: Direct API Bridge (Adeel-Xtech API Wrapper fallback)
-    if (!mediaUrl) {
-      try {
-        const form3 = new FormData();
-        form3.append('image', mediaBuffer, {
-          filename: fileName,
-          contentType: mimeType
-        });
+    const mediaUrl = apiResponse.data.result.url.trim();
 
-        const res3 = await axios.post('https://api.imgbb.com/1/upload?key=6d207e02198a847aa98d0a2a901485a5', form3, {
-          headers: { ...form3.getHeaders() }
-        });
-
-        if (res3.data && res3.data.data && res3.data.data.url) {
-          const tempUrl = res3.data.data.url;
-          // Adeel-Xtech API integration
-          const resAdeel = await axios.get(`https://adeel-xtech-apis.vercel.app/api/imgtourl?url=${encodeURIComponent(tempUrl)}`);
-          if (resAdeel.data && resAdeel.data.result && resAdeel.data.result.url) {
-            mediaUrl = resAdeel.data.result.url;
-          } else {
-            mediaUrl = tempUrl;
-          }
-        }
-      } catch (e3) {
-        console.log("Adeel-Xtech API bridge failed.");
-      }
-    }
-
-    if (!mediaUrl) {
-      throw new Error("Unable to upload media. All upload servers are currently blocking the request.");
-    }
-
-    // Determine Type Label
+    // Determine Media Type
     let mediaType = 'File';
     if (mimeType.includes('image')) mediaType = 'Image';
     else if (mimeType.includes('video')) mediaType = 'Video';
@@ -154,7 +97,6 @@ cmd({
       `*URL:* ${mediaUrl}\n\n` +
       `> *© ᴜᴘʟᴏᴀᴅᴇᴅ ʙʏ ꜱᴀʀᴡᴀʀ-ᴍᴅ 🍸*`;
 
-    // Send Result with Gifted Buttons
     await sendButtons(client, message.chat, {
       title: '',
       text: caption,
@@ -177,7 +119,10 @@ cmd({
     });
 
   } catch (error) {
-    console.error("ToURL Command Error:", error);
+    if (tempFilePath && fs.existsSync(tempFilePath)) {
+      try { fs.unlinkSync(tempFilePath); } catch (e) {}
+    }
+    console.error("Upload Command Error:", error);
     await reply(`❌ Error: ${error.message || error}`);
   }
 });
