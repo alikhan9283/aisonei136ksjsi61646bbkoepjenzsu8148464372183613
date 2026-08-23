@@ -1,7 +1,12 @@
 const { cmd } = require("../command");
-const { remini } = require("betabotz-tools");
 const axios = require("axios");
-const FormData = require("form-data");
+
+let remini;
+try {
+    remini = require("betabotz-tools").remini;
+} catch (e) {
+    console.error("[REMINI] 'betabotz-tools' package is not installed. Run: npm install betabotz-tools");
+}
 
 // Uses betabotz-tools (npm), which wraps a free scraper backed by
 // cdn.btch.bz / aemt.me — confirmed via the package's own README/source
@@ -18,6 +23,10 @@ cmd({
     filename: __filename
 }, async (client, message, match, { from, reply }) => {
     try {
+        if (!remini) {
+            return reply(`❌ Missing dependency on the server: 'betabotz-tools'\nAsk the bot owner to run: npm install betabotz-tools\n\n> ᴘᴏᴡᴇʀᴇᴅ ʙʏ 𝐒𝐀𝐑𝐖𝐀𝐑-𝐌𝐃 ⚡`);
+        }
+
         const q = message.quoted;
         const mtype = q?.mtype;
 
@@ -32,14 +41,13 @@ cmd({
             throw new Error("Downloaded image is empty or too small");
         }
 
-        // remini() needs a public URL, not a buffer — upload to a free
-        // anonymous host (catbox.moe) first, then pass that URL along.
+        // Use Node's built-in FormData/Blob (Node 18+) instead of the
+        // "form-data" package, so this step needs no extra npm install.
         const form = new FormData();
         form.append("reqtype", "fileupload");
-        form.append("fileToUpload", buffer, { filename: "image.jpg" });
+        form.append("fileToUpload", new Blob([buffer]), "image.jpg");
 
         const uploadRes = await axios.post("https://catbox.moe/user/api.php", form, {
-            headers: form.getHeaders(),
             timeout: 30000
         });
         const imageUrl = String(uploadRes.data).trim();
