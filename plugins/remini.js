@@ -1,70 +1,68 @@
-const { cmd } = require('../command');
-const fs = require('fs');
-const os = require('os');
-const path = require('path');
-const axios = require('axios');
-const FormData = require('form-data');
+const { cmd } = require("../command");
+const { remini } = require("betabotz-tools");
+const axios = require("axios");
+const FormData = require("form-data");
+
+// Uses betabotz-tools (npm), which wraps a free scraper backed by
+// cdn.btch.bz / aemt.me — confirmed via the package's own README/source
+// example: remini(url) returns { image_data: <enhanced image url>, image_size }
+// No API key needed. Install with: npm install betabotz-tools
 
 cmd({
-  pattern: "remini",
-  alias: ["enhance", "hd"],
-  react: '✨',
-  desc: "Enhance photo quality using Edith Remini API (Catbox upload)",
-  category: "tools",
-  filename: __filename
-}, async (client, message, { reply, quoted }) => {
-  try {
-    const quotedMsg = quoted || message;
-    const mimeType = (quotedMsg.msg || quotedMsg).mimetype || '';
+    pattern: "remini",
+    alias: ["enhance", "upscale", "hd"],
+    react: "✨",
+    desc: "Enhance/upscale the quality of a replied image",
+    category: "tools",
+    use: ".remini (reply to an image)",
+    filename: __filename
+}, async (client, message, match, { from, reply }) => {
+    try {
+        const q = message.quoted;
+        const mtype = q?.mtype;
 
-    if (!mimeType || !mimeType.startsWith('image/')) {
-      return reply("📸 Please reply to an image.");
+        if (!q || mtype !== "imageMessage") {
+            return reply(`✨ *IMAGE ENHANCER*\n\n⚠️ Reply to an image\n💡 Use: .remini (as a reply to a photo)\n\n> ᴘᴏᴡᴇʀᴇᴅ ʙʏ 𝐒𝐀𝐑𝐖𝐀𝐑-𝐌𝐃 ⚡`);
+        }
+
+        await client.sendMessage(message.chat, { react: { text: "✨", key: message.key } }).catch(() => {});
+
+        const buffer = await q.download();
+        if (!buffer || buffer.length < 100) {
+            throw new Error("Downloaded image is empty or too small");
+        }
+
+        // remini() needs a public URL, not a buffer — upload to a free
+        // anonymous host (catbox.moe) first, then pass that URL along.
+        const form = new FormData();
+        form.append("reqtype", "fileupload");
+        form.append("fileToUpload", buffer, { filename: "image.jpg" });
+
+        const uploadRes = await axios.post("https://catbox.moe/user/api.php", form, {
+            headers: form.getHeaders(),
+            timeout: 30000
+        });
+        const imageUrl = String(uploadRes.data).trim();
+        if (!imageUrl.startsWith("http")) {
+            throw new Error("Failed to get a temporary upload URL for the image");
+        }
+
+        const result = await remini(imageUrl);
+        if (!result?.image_data) {
+            throw new Error("remini service returned no result");
+        }
+
+        const finalRes = await axios.get(result.image_data, { responseType: "arraybuffer", timeout: 30000 });
+
+        await client.sendMessage(message.chat, {
+            image: Buffer.from(finalRes.data),
+            caption: `✨ *Enhanced!*${result.image_size ? `\n📦 ${result.image_size}` : ""}\n\n> ᴘᴏᴡᴇʀᴇᴅ ʙʏ 𝐒𝐀𝐑𝐖𝐀𝐑-𝐌𝐃 ⚡`
+        }, { quoted: message });
+
+        await client.sendMessage(message.chat, { react: { text: "✅", key: message.key } }).catch(() => {});
+    } catch (error) {
+        console.error("❌ Remini Error:", error.message);
+        await client.sendMessage(message.chat, { react: { text: "❌", key: message.key } }).catch(() => {});
+        reply(`❌ *Image enhancement failed!*\nReason: ${error.message}\n\n> ᴘᴏᴡᴇʀᴇᴅ ʙʏ 𝐒𝐀𝐑𝐖𝐀𝐑-𝐌𝐃 ⚡`);
     }
-
-    // Download image
-    const mediaBuffer = await quotedMsg.download();
-    const extension = mimeType.includes('png') ? '.png' : '.jpg';
-    const inputPath = path.join(os.tmpdir(), `input_${Date.now()}${extension}`);
-    fs.writeFileSync(inputPath, mediaBuffer);
-
-    // Upload to Catbox
-    const form = new FormData();
-    form.append('reqtype', 'fileupload');
-    form.append('fileToUpload', fs.createReadStream(inputPath));
-
-    const catboxRes = await axios.post('https://catbox.moe/user/api.php', form, {
-      headers: form.getHeaders(),
-    });
-
-    fs.unlinkSync(inputPath); // cleanup
-
-    const uploadedImage = catboxRes.data.trim();
-    if (!uploadedImage.startsWith('https://')) {
-      return reply("❌ Failed to upload image to Catbox.");
-    }
-
-    // Call Edith API
-    const apiUrl = `https://edith-apis.vercel.app/imagecreator/remini?url=${encodeURIComponent(uploadedImage)}`;
-    const apiRes = await axios.get(apiUrl, { timeout: 60000 });
-
-    const data = apiRes.data;
-
-    if (!data || !data.status || !data.result) {
-      console.log("API Response:", data);
-      return reply("❌ Failed to enhance the image. Try again later.");
-    }
-
-    // Send enhanced photo
-    await client.sendMessage(message.chat, {
-      image: { url: data.result },
-      caption: "⚡ REMINI ENHANCEMENT COMPLETED SUCCESSFULLY! 💎\n✨ _Powered by SARWAR-MD_"
-    }, { quoted: message });
-
-    // Add ✅ reaction separately
-    await client.sendMessage(message.chat, { react: { text: "✅", key: message.key } });
-
-  } catch (err) {
-    console.error("Remini Error:", err);
-    await reply(`❌ Error: ${err.message || "Failed to enhance the image."}`);
-  }
 });
