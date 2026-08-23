@@ -1,17 +1,66 @@
 const { cmd } = require("../command");
 const axios = require("axios");
 
-let removebg;
-try {
-    removebg = require("betabotz-tools").removebg;
-} catch (e) {
-    console.error("[REMOVEBG] 'betabotz-tools' package is not installed. Run: npm install betabotz-tools");
+// Uses ONLY axios (already installed in this bot) — no extra npm package
+// needed, so this works on Heroku without any npm install step.
+//
+// Tries several free, no-key "removebg" HTTP endpoints in sequence. If
+// one is down or its response shape doesn't match what's expected, the
+// next is tried automatically.
+
+const AXIOS_DEFAULTS = {
+    timeout: 30000,
+    headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36" }
+};
+
+async function uploadToCatbox(buffer) {
+    // Node 18+ has built-in FormData/Blob — no "form-data" package needed.
+    const form = new FormData();
+    form.append("reqtype", "fileupload");
+    form.append("fileToUpload", new Blob([buffer]), "image.jpg");
+
+    const res = await axios.post("https://catbox.moe/user/api.php", form, { timeout: 30000 });
+    const url = String(res.data || "").trim();
+    if (!url.startsWith("http")) throw new Error("catbox upload did not return a usable URL");
+    return url;
 }
 
-// Uses betabotz-tools (npm), which wraps a free scraper backed by
-// cdn.btch.bz / aemt.me — confirmed via the package's own README/source
-// example: removebg(url) returns { image_data: <result image url>, image_size }
-// No API key needed. Install with: npm install betabotz-tools
+async function removeBgFromUrl(imageUrl) {
+    const errors = [];
+
+    // Candidate 1: api.betabotz.eu.org (base URL confirmed via a public
+    // gist showing this domain used by the same tool family)
+    try {
+        const res = await axios.get(`https://api.betabotz.eu.org/api/tools/removebg`, {
+            ...AXIOS_DEFAULTS,
+            params: { url: imageUrl }
+        });
+        const result = res.data?.result || res.data?.data?.image_data || res.data?.image_data || res.data?.url;
+        if (result) return result;
+        errors.push("betabotz.eu.org: no usable field in response");
+    } catch (e) {
+        errors.push(`betabotz.eu.org: ${e.response?.status || ''} ${e.message}`);
+    }
+
+    // Candidate 2: siputzx (same family of free scraper APIs used
+    // elsewhere in this bot, tools category)
+    try {
+        const res = await axios.get(`https://api.siputzx.my.id/api/tools/removebg`, {
+            ...AXIOS_DEFAULTS,
+            params: { url: imageUrl },
+            responseType: 'arraybuffer'
+        });
+        const contentType = res.headers['content-type'] || '';
+        if (contentType.startsWith('image/')) {
+            return Buffer.from(res.data); // this one returns raw image bytes directly
+        }
+        errors.push("siputzx: response was not an image");
+    } catch (e) {
+        errors.push(`siputzx: ${e.response?.status || ''} ${e.message}`);
+    }
+
+    throw new Error(errors.join(" | "));
+}
 
 cmd({
     pattern: "removebg",
@@ -22,12 +71,7 @@ cmd({
     use: ".removebg (reply to an image)",
     filename: __filename
 }, async (client, message, match, { from, reply }) => {
-    let downloadedBuffer;
     try {
-        if (!removebg) {
-            return reply(`❌ Missing dependency on the server: 'betabotz-tools'\nAsk the bot owner to run: npm install betabotz-tools\n\n> ᴘᴏᴡᴇʀᴇᴅ ʙʏ 𝐒𝐀𝐑𝐖𝐀𝐑-𝐌𝐃 ⚡`);
-        }
-
         const q = message.quoted;
         const mtype = q?.mtype;
 
@@ -37,38 +81,25 @@ cmd({
 
         await client.sendMessage(message.chat, { react: { text: "✂️", key: message.key } }).catch(() => {});
 
-        // betabotz-tools' removebg() takes a direct image URL, not a
-        // buffer — so we need a temporary public URL. We upload the
-        // downloaded image bytes to a free anonymous host (catbox.moe)
-        // first, then pass that URL to removebg().
         const buffer = await q.download();
         if (!buffer || buffer.length < 100) {
             throw new Error("Downloaded image is empty or too small");
         }
 
-        // Use Node's built-in FormData/Blob (Node 18+) instead of the
-        // "form-data" package, so this step needs no extra npm install.
-        const form = new FormData();
-        form.append("reqtype", "fileupload");
-        form.append("fileToUpload", new Blob([buffer]), "image.jpg");
+        const imageUrl = await uploadToCatbox(buffer);
+        const result = await removeBgFromUrl(imageUrl);
 
-        const uploadRes = await axios.post("https://catbox.moe/user/api.php", form, {
-            timeout: 30000
-        });
-        const imageUrl = String(uploadRes.data).trim();
-        if (!imageUrl.startsWith("http")) {
-            throw new Error("Failed to get a temporary upload URL for the image");
+        // result may be a URL string (candidate 1) or already a Buffer (candidate 2)
+        let outputBuffer;
+        if (Buffer.isBuffer(result)) {
+            outputBuffer = result;
+        } else {
+            const finalRes = await axios.get(result, { responseType: "arraybuffer", timeout: 30000 });
+            outputBuffer = Buffer.from(finalRes.data);
         }
-
-        const result = await removebg(imageUrl);
-        if (!result?.image_data) {
-            throw new Error("removebg service returned no result");
-        }
-
-        const finalRes = await axios.get(result.image_data, { responseType: "arraybuffer", timeout: 30000 });
 
         await client.sendMessage(message.chat, {
-            image: Buffer.from(finalRes.data),
+            image: outputBuffer,
             caption: `> ᴘᴏᴡᴇʀᴇᴅ ʙʏ 𝐒𝐀𝐑𝐖𝐀𝐑-𝐌𝐃 ⚡`
         }, { quoted: message });
 
