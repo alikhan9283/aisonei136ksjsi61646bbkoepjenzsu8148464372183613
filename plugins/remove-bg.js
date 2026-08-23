@@ -4,17 +4,16 @@ const axios = require("axios");
 // Uses ONLY axios (already installed in this bot) — no extra npm package
 // needed, so this works on Heroku without any npm install step.
 //
-// Tries several free, no-key "removebg" HTTP endpoints in sequence. If
-// one is down or its response shape doesn't match what's expected, the
+// Tries several free, no-key "remini"/upscale HTTP endpoints in sequence.
+// If one is down or its response shape doesn't match what's expected, the
 // next is tried automatically.
 
 const AXIOS_DEFAULTS = {
-    timeout: 30000,
+    timeout: 45000,
     headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36" }
 };
 
 async function uploadToCatbox(buffer) {
-    // Node 18+ has built-in FormData/Blob — no "form-data" package needed.
     const form = new FormData();
     form.append("reqtype", "fileupload");
     form.append("fileToUpload", new Blob([buffer]), "image.jpg");
@@ -25,13 +24,12 @@ async function uploadToCatbox(buffer) {
     return url;
 }
 
-async function removeBgFromUrl(imageUrl) {
+async function enhanceFromUrl(imageUrl) {
     const errors = [];
 
-    // Candidate 1: api.betabotz.eu.org (base URL confirmed via a public
-    // gist showing this domain used by the same tool family)
+    // Candidate 1: api.betabotz.eu.org
     try {
-        const res = await axios.get(`https://api.betabotz.eu.org/api/tools/removebg`, {
+        const res = await axios.get(`https://api.betabotz.eu.org/api/tools/remini`, {
             ...AXIOS_DEFAULTS,
             params: { url: imageUrl }
         });
@@ -42,17 +40,16 @@ async function removeBgFromUrl(imageUrl) {
         errors.push(`betabotz.eu.org: ${e.response?.status || ''} ${e.message}`);
     }
 
-    // Candidate 2: siputzx (same family of free scraper APIs used
-    // elsewhere in this bot, tools category)
+    // Candidate 2: siputzx (tools/remini or tools/upscale route)
     try {
-        const res = await axios.get(`https://api.siputzx.my.id/api/tools/removebg`, {
+        const res = await axios.get(`https://api.siputzx.my.id/api/tools/remini`, {
             ...AXIOS_DEFAULTS,
             params: { url: imageUrl },
             responseType: 'arraybuffer'
         });
         const contentType = res.headers['content-type'] || '';
         if (contentType.startsWith('image/')) {
-            return Buffer.from(res.data); // this one returns raw image bytes directly
+            return Buffer.from(res.data);
         }
         errors.push("siputzx: response was not an image");
     } catch (e) {
@@ -63,12 +60,12 @@ async function removeBgFromUrl(imageUrl) {
 }
 
 cmd({
-    pattern: "removebg",
-    alias: ["rmbg", "nobg"],
-    react: "✂️",
-    desc: "Remove the background from a replied image",
+    pattern: "remini",
+    alias: ["enhance", "upscale", "hd"],
+    react: "✨",
+    desc: "Enhance/upscale the quality of a replied image",
     category: "tools",
-    use: ".removebg (reply to an image)",
+    use: ".remini (reply to an image)",
     filename: __filename
 }, async (client, message, match, { from, reply }) => {
     try {
@@ -76,10 +73,10 @@ cmd({
         const mtype = q?.mtype;
 
         if (!q || mtype !== "imageMessage") {
-            return reply(`✂️ *REMOVE BACKGROUND*\n\n⚠️ Reply to an image\n💡 Use: .removebg (as a reply to a photo)\n\n> ᴘᴏᴡᴇʀᴇᴅ ʙʏ 𝐒𝐀𝐑𝐖𝐀𝐑-𝐌𝐃 ⚡`);
+            return reply(`✨ *IMAGE ENHANCER*\n\n⚠️ Reply to an image\n💡 Use: .remini (as a reply to a photo)\n\n> ᴘᴏᴡᴇʀᴇᴅ ʙʏ 𝐒𝐀𝐑𝐖𝐀𝐑-𝐌𝐃 ⚡`);
         }
 
-        await client.sendMessage(message.chat, { react: { text: "✂️", key: message.key } }).catch(() => {});
+        await client.sendMessage(message.chat, { react: { text: "✨", key: message.key } }).catch(() => {});
 
         const buffer = await q.download();
         if (!buffer || buffer.length < 100) {
@@ -87,9 +84,8 @@ cmd({
         }
 
         const imageUrl = await uploadToCatbox(buffer);
-        const result = await removeBgFromUrl(imageUrl);
+        const result = await enhanceFromUrl(imageUrl);
 
-        // result may be a URL string (candidate 1) or already a Buffer (candidate 2)
         let outputBuffer;
         if (Buffer.isBuffer(result)) {
             outputBuffer = result;
@@ -100,13 +96,13 @@ cmd({
 
         await client.sendMessage(message.chat, {
             image: outputBuffer,
-            caption: `> ᴘᴏᴡᴇʀᴇᴅ ʙʏ 𝐒𝐀𝐑𝐖𝐀𝐑-𝐌𝐃 ⚡`
+            caption: `✨ *Enhanced!*\n\n> ᴘᴏᴡᴇʀᴇᴅ ʙʏ 𝐒𝐀𝐑𝐖𝐀𝐑-𝐌𝐃 ⚡`
         }, { quoted: message });
 
         await client.sendMessage(message.chat, { react: { text: "✅", key: message.key } }).catch(() => {});
     } catch (error) {
-        console.error("❌ RemoveBG Error:", error.message);
+        console.error("❌ Remini Error:", error.message);
         await client.sendMessage(message.chat, { react: { text: "❌", key: message.key } }).catch(() => {});
-        reply(`❌ *Background removal failed!*\nReason: ${error.message}\n\n> ᴘᴏᴡᴇʀᴇᴅ ʙʏ 𝐒𝐀𝐑𝐖𝐀𝐑-𝐌𝐃 ⚡`);
+        reply(`❌ *Image enhancement failed!*\nReason: ${error.message}\n\n> ᴘᴏᴡᴇʀᴇᴅ ʙʏ 𝐒𝐀𝐑𝐖𝐀𝐑-𝐌𝐃 ⚡`);
     }
 });
