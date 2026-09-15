@@ -1,5 +1,5 @@
 // commands/chatbot.js
-// SARWAR MD — AI Chatbot (Natural Conversation)
+// SARWAR MD — AI Chatbot (No Owner Check)
 
 const axios = require('axios');
 const { cmd } = require("../command");
@@ -14,8 +14,8 @@ const MODEL = "openai/gpt-5.5";
 // ============================================================
 //  CHATBOT STATE
 // ============================================================
-let chatbotEnabled = false; // Default OFF
-const chatHistory = new Map(); // Per-user history
+let chatbotEnabled = false;
+const chatHistory = new Map();
 
 // ============================================================
 //  MAIN COMMAND: .chatbot on/off/status
@@ -23,23 +23,16 @@ const chatHistory = new Map(); // Per-user history
 cmd({
     pattern: "chatbot",
     alias: ["chat", "aichat", "bot"],
-    desc: "🤖 Enable/disable AI chatbot for auto-reply",
+    desc: "🤖 Enable/disable AI chatbot",
     react: "🤖",
     category: "utility",
     filename: __filename,
     use: ".chatbot on/off/status"
-}, async (conn, message, m, { from, args, q, reply, sender }) => {
+}, async (conn, message, m, { from, args, q, reply }) => {
     try {
         const action = args[0]?.toLowerCase() || 'status';
 
-        // Owner only
-        const botNumber = conn.user.id.split(':')[0];
-        const senderNumber = (message.key.participant || from).split('@')[0].split(':')[0];
-        const isOwner = senderNumber === botNumber;
-
-        if (!isOwner) {
-            return reply(`❌ *Owner Only!*`);
-        }
+        // NO OWNER CHECK - ANYONE CAN USE
 
         if (action === 'on') {
             chatbotEnabled = true;
@@ -49,12 +42,12 @@ cmd({
 ╭━━━〔 STATUS 〕━━━╮
 │ 🤖 Mode: AI Auto-Reply
 │ 📝 Model: ${MODEL}
-│ 💬 Reply Type: Natural Chat
+│ 💬 Reply: Natural Chat
 │ ⚡ Status: Online
 ╰━━━━━━━━━━━━━━━━╯
 
-📌 *Now bot will reply to all messages*
-📌 *.chatbot off* to disable
+📌 Bot will reply to ALL messages
+📌 .chatbot off to disable
 
 > *ᴘᴏᴡᴇʀᴇᴅ ʙʏ sᴀʀᴡᴀʀ-ᴍᴅ ⚡*`);
         }
@@ -69,22 +62,18 @@ cmd({
 > *ᴘᴏᴡᴇʀᴇᴅ ʙʏ sᴀʀᴡᴀʀ-ᴍᴅ ⚡*`);
         }
 
-        // STATUS
         const status = chatbotEnabled ? '✅ ON' : '❌ OFF';
-        let userCount = chatHistory.size;
-
         reply(`🤖 *CHATBOT STATUS*
 
 ╭━━━〔 DETAILS 〕━━━╮
 │ 📊 Status: ${status}
 │ 📝 Model: ${MODEL}
-│ 👥 Active Users: ${userCount}
-│ 💾 History: In-Memory
+│ 👥 Users: ${chatHistory.size}
 ╰━━━━━━━━━━━━━━━━╯
 
-📌 *.chatbot on* - Activate
-📌 *.chatbot off* - Deactivate
-📌 *.chatbot status* - This menu
+📌 .chatbot on - Activate
+📌 .chatbot off - Deactivate
+📌 .chatbot status - Menu
 
 > *ᴘᴏᴡᴇʀᴇᴅ ʙʏ sᴀʀᴡᴀʀ-ᴍᴅ ⚡*`);
 
@@ -107,10 +96,10 @@ cmd({
         // Ignore bot's own messages
         if (message.key.fromMe) return;
 
-        // Ignore status broadcasts
+        // Ignore status
         if (from === 'status@broadcast') return;
 
-        // Ignore group messages (only DM)
+        // Ignore groups (only DM)
         if (from.endsWith('@g.us')) return;
 
         // Get message text
@@ -120,42 +109,21 @@ cmd({
         } else if (message.message?.extendedTextMessage?.text) {
             userText = message.message.extendedTextMessage.text;
         } else {
-            return; // Ignore non-text
+            return;
         }
 
-        // Ignore commands (starting with .)
+        // Ignore commands
         const prefix = process.env.PREFIX || '.';
         if (userText.startsWith(prefix)) return;
-
-        // Ignore empty
         if (!userText.trim()) return;
 
         const senderNumber = sender.split('@')[0].split(':')[0];
         const pushName = message.pushName || 'User';
 
-        console.log(`🤖 Chatbot: ${pushName} (${senderNumber}): ${userText}`);
+        console.log(`🤖 ${pushName}: ${userText}`);
 
-        // Show typing indicator
+        // Typing indicator
         await conn.sendPresenceUpdate('composing', from);
-
-        // Build context with history
-        const history = chatHistory.get(senderNumber) || [];
-        const systemPrompt = `You are SARWAR MD, a friendly Pakistani WhatsApp assistant.
-
-Rules:
-1. Reply in the SAME language the user writes (Urdu, English, Roman Urdu, Hindi).
-2. Keep replies SHORT (1-3 lines max).
-3. Be friendly, helpful, and casual.
-4. If user says "Assalamualaikum" or "Salam", reply "Walaikum Assalam! 🌙"
-5. If user asks about owner being busy or asks to meet, say: "Owner abhi busy hain, thodi der mein reply karenge. Aap wait karein. ⏳"
-6. If user says "hello", "hi", "hey", reply warmly.
-7. If user says "Jani", "Bhai", reply politely.
-8. Never share personal info.
-9. If user asks about bot, say you are SARWAR MD bot.
-10. Use emojis naturally but don't overuse.
-
-Recent conversation:
-${history.slice(-4).map(h => `${h.role}: ${h.content}`).join('\n')}`;
 
         // Call AI API
         const response = await axios.get(API_URL, {
@@ -181,17 +149,11 @@ ${history.slice(-4).map(h => `${h.role}: ${h.content}`).join('\n')}`;
             botReply = `Owner abhi busy hain, thodi der mein reply karenge. ⏳`;
         }
 
-        // Clean up reply
+        // Clean up
         botReply = botReply.trim();
         if (botReply.length > 500) {
             botReply = botReply.substring(0, 500) + '...';
         }
-
-        // Save to history
-        history.push({ role: 'user', content: userText });
-        history.push({ role: 'assistant', content: botReply });
-        if (history.length > 20) history.splice(0, history.length - 20);
-        chatHistory.set(senderNumber, history);
 
         // Stop typing
         await conn.sendPresenceUpdate('paused', from);
@@ -201,12 +163,11 @@ ${history.slice(-4).map(h => `${h.role}: ${h.content}`).join('\n')}`;
             text: botReply
         }, { quoted: message });
 
-        console.log(`✅ Chatbot replied to ${pushName}`);
+        console.log(`✅ Replied: ${botReply.substring(0, 50)}`);
 
     } catch (error) {
         console.error("❌ Chatbot reply error:", error.message);
 
-        // Fallback reply
         try {
             await conn.sendMessage(from, {
                 text: `Owner abhi busy hain, thodi der mein reply karenge. ⏳`
