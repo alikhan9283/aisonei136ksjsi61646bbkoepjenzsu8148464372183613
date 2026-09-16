@@ -6,7 +6,7 @@ const API_KEY = "supun-b4qb8wgwfd8o0qmzdxfo56cb";
 
 cmd({
     pattern: "play2",
-    alias: ["song2", "naat", "audio"],
+    alias: ["song2"],
     react: "🎵",
     desc: "Search and download a song/naat as audio by name",
     category: "download",
@@ -51,33 +51,61 @@ cmd({
         const audioUrl = data.result.downloadUrl;
         const progressURL = data.result.metadata?.progressURL;
 
-        // This is an async conversion service — the downloadUrl may not be
-        // instantly ready. Poll the progress endpoint (if given) for up to
-        // ~30s before attempting the actual download.
+        // This IS a genuinely async conversion (confirmed: the API's own
+        // response shows progress still at 3% / percent 0 right after the
+        // initial request) — there's no way to skip the wait, but we can
+        // poll efficiently: check often (every 2s) and stop the INSTANT
+        // it's done, instead of always waiting a fixed amount either way.
         if (progressURL) {
-            for (let i = 0; i < 10; i++) {
+            const maxWaitMs = 60000; // hard ceiling so it can't hang forever
+            const pollIntervalMs = 2000;
+            const startTime = Date.now();
+
+            while (Date.now() - startTime < maxWaitMs) {
                 try {
-                    const prog = await axios.get(progressURL, { timeout: 10000 });
-                    const percent = prog.data?.percent ?? prog.data?.progress;
-                    if (percent === 100 || prog.data?.download_url) break;
+                    const prog = await axios.get(progressURL, { timeout: 8000 });
+                    const percent = prog.data?.percent ?? prog.data?.finalProgress?.percent;
+                    const progressVal = prog.data?.progress ?? prog.data?.finalProgress?.progress;
+                    const hasError = prog.data?.error || prog.data?.finalProgress?.error;
+
+                    if (hasError) {
+                        throw new Error("Conversion service reported an error while processing");
+                    }
+                    // percent === 100 is the real "done" signal per this API
+                    if (percent === 100) break;
                 } catch (e) {
-                    // progress check failing isn't fatal, just stop polling
-                    break;
+                    if (e.message?.includes("Conversion service")) throw e;
+                    // transient poll failure — just try again next loop
                 }
-                await new Promise((r) => setTimeout(r, 3000));
+                await new Promise((r) => setTimeout(r, pollIntervalMs));
             }
         }
 
-        // Step 3: download the actual audio bytes server-side
-        const audioRes = await axios.get(audioUrl, {
-            responseType: "arraybuffer",
-            timeout: 60000,
-            headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36" }
-        });
-        const audioBuffer = Buffer.from(audioRes.data);
+        // Now attempt the actual download — a few quick retries in case
+        // there's a brief propagation delay right after hitting 100%.
+        let audioBuffer = null;
+        let lastErr = null;
+        for (let attempt = 0; attempt < 3; attempt++) {
+            try {
+                const audioRes = await axios.get(audioUrl, {
+                    responseType: "arraybuffer",
+                    timeout: 20000,
+                    headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36" }
+                });
+                const buf = Buffer.from(audioRes.data);
+                if (buf.length > 1000) {
+                    audioBuffer = buf;
+                    break;
+                }
+                lastErr = new Error("File not ready yet");
+            } catch (e) {
+                lastErr = e;
+            }
+            if (attempt < 2) await new Promise((r) => setTimeout(r, 1500));
+        }
 
-        if (!audioBuffer || audioBuffer.length < 1000) {
-            throw new Error("Downloaded audio file is empty or too small — conversion may not have finished yet, try again in a moment");
+        if (!audioBuffer) {
+            throw lastErr || new Error("Audio file never became ready");
         }
 
         await client.sendMessage(message.chat, {
