@@ -6,7 +6,7 @@ const API_KEY = "supun-b4qb8wgwfd8o0qmzdxfo56cb";
 
 cmd({
     pattern: "play2",
-    alias: ["song2", "naat", "audio"],
+    alias: ["song2"],
     react: "🎵",
     desc: "Search and download a song/naat as audio by name",
     category: "download",
@@ -41,8 +41,27 @@ cmd({
         }, { quoted: message }).catch(() => {});
 
         // Step 2: ask the converter API to turn that video into mp3
+        // This provider API is confirmed intermittently unreliable — the
+        // exact same video that converted successfully before can return
+        // a 500 on a later attempt. Retry a few times with short gaps
+        // before giving up, since it often succeeds on a second try.
         const apiUrl = `https://supunofc.site/api/download/down/ytdl/dl?url=${encodeURIComponent(video.url)}&type=mp3&apikey=${API_KEY}`;
-        const { data } = await axios.get(apiUrl, { timeout: 40000 });
+        let data;
+        let lastRequestErr;
+        for (let attempt = 0; attempt < 3; attempt++) {
+            try {
+                const res = await axios.get(apiUrl, { timeout: 40000 });
+                data = res.data;
+                break;
+            } catch (e) {
+                lastRequestErr = e;
+                console.log(`[PLAY] conversion request attempt ${attempt + 1} failed:`, e.response?.status || e.message);
+                if (attempt < 2) await new Promise((r) => setTimeout(r, 3000));
+            }
+        }
+        if (!data) {
+            throw new Error(`Conversion service is temporarily unavailable (tried 3 times). ${lastRequestErr?.response?.status ? `Status: ${lastRequestErr.response.status}` : lastRequestErr?.message || ''}`);
+        }
 
         if (!data?.success || !data?.result?.downloadUrl) {
             throw new Error(data?.message || "Conversion service returned no audio link");
