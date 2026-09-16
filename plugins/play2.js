@@ -9,10 +9,14 @@ const yts = require("yt-search");
 // this library talks to YouTube directly instead of going through an
 // extra unofficial middleman service.
 let ytdl;
+let loadError;
 try {
     ytdl = require("@dark-yasiya/yt-dl.js");
+    console.log("[PLAY2] module loaded. typeof:", typeof ytdl);
+    console.log("[PLAY2] module keys:", ytdl && typeof ytdl === "object" ? Object.keys(ytdl) : "(not an object)");
 } catch (e) {
-    console.error("[PLAY2] '@dark-yasiya/yt-dl.js' failed to load:", e.message);
+    loadError = e;
+    console.error("[PLAY2] '@dark-yasiya/yt-dl.js' require() failed:", e.message);
 }
 
 cmd({
@@ -26,7 +30,7 @@ cmd({
 }, async (client, message, match, { from, reply, q }) => {
     try {
         if (!ytdl) {
-            return reply(`❌ Required module '@dark-yasiya/yt-dl.js' failed to load on the server.\n\n> ᴘᴏᴡᴇʀᴇᴅ ʙʏ 𝐒𝐀𝐑𝐖𝐀𝐑-𝐌𝐃 ⚡`);
+            return reply(`❌ Required module '@dark-yasiya/yt-dl.js' failed to load on the server.\nLoad error: ${loadError?.message || "unknown (module is undefined with no thrown error)"}\n\n> ᴘᴏᴡᴇʀᴇᴅ ʙʏ 𝐒𝐀𝐑𝐖𝐀𝐑-𝐌𝐃 ⚡`);
         }
 
         const query = q ? q.trim() : "";
@@ -92,8 +96,16 @@ cmd({
 
         await client.sendMessage(message.chat, { react: { text: "✅", key: message.key } }).catch(() => {});
     } catch (error) {
-        console.error("❌ Play2 Error:", error.message);
+        // .message showed as "undefined" before — dump everything we can
+        // about the error object so the real cause is visible this time.
+        console.error("❌ Play2 Error (full):", error);
+        let details;
+        try {
+            details = error?.message || error?.toString?.() || JSON.stringify(error) || String(error);
+        } catch {
+            details = "Unknown error (could not stringify)";
+        }
         await client.sendMessage(message.chat, { react: { text: "❌", key: message.key } }).catch(() => {});
-        reply(`❌ *Failed to get audio!*\nReason: ${error.message}\n\n> ᴘᴏᴡᴇʀᴇᴅ ʙʏ 𝐒𝐀𝐑𝐖𝐀𝐑-𝐌𝐃 ⚡`);
+        reply(`❌ *Failed to get audio!*\nReason: ${details}\n\n> ᴘᴏᴡᴇʀᴇᴅ ʙʏ 𝐒𝐀𝐑𝐖𝐀𝐑-𝐌𝐃 ⚡`);
     }
 });
