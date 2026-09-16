@@ -6,7 +6,7 @@ const API_KEY = "supun-b4qb8wgwfd8o0qmzdxfo56cb";
 
 cmd({
     pattern: "play2",
-    alias: ["song2"],
+    alias: ["song2", "naat", "audio"],
     react: "🎵",
     desc: "Search and download a song/naat as audio by name",
     category: "download",
