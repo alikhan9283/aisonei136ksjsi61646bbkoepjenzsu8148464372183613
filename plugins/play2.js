@@ -2,52 +2,17 @@ const { cmd } = require("../command");
 const axios = require("axios");
 const yts = require("yt-search");
 
-// Primary source: api.download-lagu-mp3.com — returns a direct download
-// URL instantly (no async conversion/polling needed), confirmed via its
-// public documentation. Response shape:
-// { vidID, vidTitle, vidInfo: { "0": { dloadUrl, bitrate, mp3size }, ... } }
-// dloadUrl is protocol-relative (starts with "//"), needs "https:" prepended.
-async function getFromDownloadLaguMp3(videoId) {
-    const res = await axios.get(`https://api.download-lagu-mp3.com/@api/json/mp3/${videoId}`, { timeout: 20000 });
-    const info = res.data?.vidInfo;
-    if (!info) throw new Error("No vidInfo in response");
-
-    // Prefer the highest bitrate available
-    const entries = Object.values(info).filter((e) => e?.dloadUrl);
-    if (!entries.length) throw new Error("No download entries found");
-    entries.sort((a, b) => (b.bitrate || 0) - (a.bitrate || 0));
-    const best = entries[0];
-
-    let url = best.dloadUrl;
-    if (url.startsWith("//")) url = "https:" + url;
-    return url;
-}
-
-// Fallback source: supunofc.site — confirmed working but has an async
-// conversion step (polling required) and has shown intermittent 500s.
-// Only used if the primary (fast, direct) source fails entirely.
-const FALLBACK_API_KEY = "supun-b4qb8wgwfd8o0qmzdxfo56cb";
-async function getFromSupunofc(videoUrl) {
-    const apiUrl = `https://supunofc.site/api/download/down/ytdl/dl?url=${encodeURIComponent(videoUrl)}&type=mp3&apikey=${FALLBACK_API_KEY}`;
-    const { data } = await axios.get(apiUrl, { timeout: 30000 });
-    if (!data?.success || !data?.result?.downloadUrl) throw new Error("No downloadUrl in fallback response");
-
-    const audioUrl = data.result.downloadUrl;
-    const progressURL = data.result.metadata?.progressURL;
-
-    if (progressURL) {
-        const maxWaitMs = 30000;
-        const startTime = Date.now();
-        while (Date.now() - startTime < maxWaitMs) {
-            try {
-                const prog = await axios.get(progressURL, { timeout: 8000 });
-                const percent = prog.data?.percent ?? prog.data?.finalProgress?.percent;
-                if (percent === 100) break;
-            } catch {}
-            await new Promise((r) => setTimeout(r, 2000));
-        }
-    }
-    return audioUrl;
+// Uses @dark-yasiya/yt-dl.js — this package is ALREADY listed in this
+// bot's own package.json, so no npm install/`.update` is needed for it.
+// This avoids the unreliable third-party wrapper APIs (Vreden,
+// supunofc.site, download-lagu-mp3.com) that kept returning 500s —
+// this library talks to YouTube directly instead of going through an
+// extra unofficial middleman service.
+let ytdl;
+try {
+    ytdl = require("@dark-yasiya/yt-dl.js");
+} catch (e) {
+    console.error("[PLAY2] '@dark-yasiya/yt-dl.js' failed to load:", e.message);
 }
 
 cmd({
@@ -60,6 +25,10 @@ cmd({
     filename: __filename
 }, async (client, message, match, { from, reply, q }) => {
     try {
+        if (!ytdl) {
+            return reply(`❌ Required module '@dark-yasiya/yt-dl.js' failed to load on the server.\n\n> ᴘᴏᴡᴇʀᴇᴅ ʙʏ 𝐒𝐀𝐑𝐖𝐀𝐑-𝐌𝐃 ⚡`);
+        }
+
         const query = q ? q.trim() : "";
         if (!query) {
             return reply(`🎵 *PLAY*\n\n⚠️ Please provide a song/naat name\n💡 Use: .play2 <name>\n📝 Example: .play2 Atif Aslam Pehli Dafa\n\n> ᴘᴏᴡᴇʀᴇᴅ ʙʏ 𝐒𝐀𝐑𝐖𝐀𝐑-𝐌𝐃 ⚡`);
@@ -83,15 +52,28 @@ cmd({
             caption: infoCaption
         }, { quoted: message }).catch(() => {});
 
-        let audioUrl;
-        try {
-            audioUrl = await getFromDownloadLaguMp3(video.videoId);
-        } catch (e) {
-            console.log("[PLAY2] primary source failed, trying fallback:", e.message);
-            audioUrl = await getFromSupunofc(video.url);
+        // This package's exact function name/signature may differ slightly
+        // by version — try the common ytmp3(url) shape first, and surface
+        // a clear error if the module's exports don't match so it can be
+        // corrected quickly rather than failing silently.
+        if (typeof ytdl.ytmp3 !== "function") {
+            throw new Error(`Module loaded but 'ytmp3' function not found. Available exports: ${Object.keys(ytdl).join(", ")}`);
         }
 
-        const audioRes = await axios.get(audioUrl, {
+        const result = await ytdl.ytmp3(video.url);
+
+        const downloadUrl =
+            result?.download ||
+            result?.downloadUrl ||
+            result?.url ||
+            result?.data?.download ||
+            result?.result?.download;
+
+        if (!downloadUrl) {
+            throw new Error(`No download URL in response. Response keys: ${Object.keys(result || {}).join(", ")}`);
+        }
+
+        const audioRes = await axios.get(downloadUrl, {
             responseType: "arraybuffer",
             timeout: 40000,
             headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36" }
