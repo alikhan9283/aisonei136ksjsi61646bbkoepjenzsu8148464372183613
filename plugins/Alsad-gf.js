@@ -70,7 +70,7 @@ async function convertGifToMp4(gifBuffer) {
 }
 
 cmd({
-    pattern: "sad",
+    pattern: "😢",
     alias: ["sadmood", "heartbreak"],
     react: "😢",
     desc: "Sad anime GIF with heartbreak shayari",
