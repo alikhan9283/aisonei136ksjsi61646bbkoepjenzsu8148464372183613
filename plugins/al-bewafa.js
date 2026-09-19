@@ -1,9 +1,7 @@
 const { cmd } = require("../command");
-const fs = require("fs");
-const path = require("path");
+const axios = require("axios");
 
-// Voice file must be placed at: <bot_root>/data/bewafa-v.m4a
-const AUDIO_PATH = path.join(__dirname, "..", "data", "bewafa-v.m4a");
+const AUDIO_URL = "https://files.catbox.moe/9pgorw.ogg";
 
 const SHAYARI = [
     'وہ جو کبھی میری زندگی کا حصہ تھا، آج بیوفائی کی مثال بن گیا 💔',
@@ -32,10 +30,6 @@ cmd({
     try {
         await client.sendMessage(message.chat, { react: { text: "💔", key: message.key } }).catch(() => {});
 
-        if (!fs.existsSync(AUDIO_PATH)) {
-            throw new Error(`Audio file not found on server at data/bewafa-v.m4a — please upload it there`);
-        }
-
         const pools = [SHAYARI, SHAYARI_ROMAN, SHAYARI_ENGLISH];
         const pool = pools[Math.floor(Math.random() * pools.length)];
         const line = pool[Math.floor(Math.random() * pool.length)];
@@ -44,9 +38,16 @@ cmd({
             text: `💔 *${line}*\n\n> ᴘᴏᴡᴇʀᴇᴅ ʙʏ 𝐒𝐀𝐑𝐖𝐀𝐑-𝐌𝐃 ⚡`
         }, { quoted: message });
 
+        const audioRes = await axios.get(AUDIO_URL, {
+            responseType: "arraybuffer",
+            timeout: 30000,
+            headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36" }
+        });
+        const audioBuffer = Buffer.from(audioRes.data);
+
         await client.sendMessage(message.chat, {
-            audio: fs.readFileSync(AUDIO_PATH),
-            mimetype: "audio/mp4",
+            audio: audioBuffer,
+            mimetype: "audio/ogg; codecs=opus",
             ptt: true
         }, { quoted: message });
 
