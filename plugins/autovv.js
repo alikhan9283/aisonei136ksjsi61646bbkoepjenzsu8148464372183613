@@ -1,17 +1,17 @@
 const { cmd } = require("../command");
-const config = require("../config");
+const fs = require("fs");
+const path = require("path");
 
 // ═══════════════════════════════════════════════════════════
-//  AUTO VIEW-ONCE → OWNER INBOX (ON/OFF SYSTEM)
-//  Group ya private, koi bhi view-once photo/video/voice
-//  → automatic owner inbox mein forward (silent)
+//  AUTO VIEW-ONCE → OWNER INBOX (ON = BAS START)
 // ═══════════════════════════════════════════════════════════
 
-let ENABLED = true;
-let ENGINE = null;      // polling engine
-let BOOTSTRAP = null;   // globals dhoondhne wala retry
-let STORE = null;
-let CLIENT = null;
+const STATE_FILE = path.join(__dirname, "auto-vv-state.json");
+let STATE = { enabled: true, owner: "" };
+try { if (fs.existsSync(STATE_FILE)) STATE = Object.assign(STATE, JSON.parse(fs.readFileSync(STATE_FILE, "utf8"))); } catch (e) {}
+function saveState() { try { fs.writeFileSync(STATE_FILE, JSON.stringify(STATE)); } catch (e) {} }
+
+let ENGINE_MODE = "none";
 const DONE = new Set();
 const LOAD_TIME = Math.floor(Date.now() / 1000);
 
@@ -20,16 +20,8 @@ for (const p of ["@whiskeysockets/baileys", "@adiwajshing/baileys", "baileys"]) 
     try { const b = require(p); if (b && b.downloadMediaMessage) { DLM = b.downloadMediaMessage; break; } } catch (e) {}
 }
 
-function getOwnerJid() {
-    try {
-        const shapes = [config?.OWNER, config?.owner, config?.ownerNumber, config?.owner_number, config?.NUMBERS?.OWNER, config?.botNumber];
-        for (const v of shapes) {
-            if (v !== undefined && v !== null && String(v).trim() !== "") {
-                const num = String(v).replace(/[^0-9]/g, "");
-                if (num.length >= 10) return num + "@s.whatsapp.net";
-            }
-        }
-    } catch (e) {}
+function normJid(v) {
+    try { const num = String(v).replace(/[^0-9]/g, ""); if (num.length >= 10) return num + "@s.whatsapp.net"; } catch (e) {}
     return "";
 }
 
@@ -52,20 +44,19 @@ async function downloadRaw(raw, client) {
 
 async function forwardRaw(raw, client) {
     try {
-        if (!raw || !raw.key || !raw.message) return;
+        if (!STATE.enabled || !raw || !raw.key || !raw.message) return;
         const jid = raw.key.remoteJid || "";
         if (jid === "status@broadcast") return;
         const id = raw.key.id || "";
         if (!id || DONE.has(id)) return;
         const ts = Number(raw.messageTimestamp || 0);
-        if (ts && ts < LOAD_TIME - 60) { DONE.add(id); return; } // purani history skip
+        if (ts && ts < LOAD_TIME - 60) { DONE.add(id); return; }
         const inner = extractVO(raw.message);
         if (!inner) return;
         DONE.add(id);
-        if (!ENABLED) return;
 
-        const ownerJid = getOwnerJid();
-        if (!ownerJid) { console.error("[AUTO-VV] Owner number set nahi!"); return; }
+        const owner = STATE.owner;
+        if (!owner) return;
 
         let mediaType = "", caption = "", mimetype = "", ptt = false;
         if (inner.imageMessage) { mediaType = "image"; caption = inner.imageMessage.caption || ""; mimetype = inner.imageMessage.mimetype; }
@@ -76,13 +67,11 @@ async function forwardRaw(raw, client) {
         const buffer = await downloadRaw(raw, client);
         const senderName = raw.pushName || (raw.key.participant || jid).split("@")[0];
         let chatName = "Private Chat";
-        if (jid.endsWith("@g.us")) {
-            try { chatName = (await client.groupMetadata(jid)).subject; } catch (e) { chatName = "Group"; }
-        }
+        if (jid.endsWith("@g.us")) { try { chatName = (await client.groupMetadata(jid)).subject; } catch (e) { chatName = "Group"; } }
         const info = `🚨 *AUTO VIEW-ONCE CAPTURE* 🚨\n\n👤 *Sender:* ${senderName}\n💬 *Chat:* ${chatName}\n📝 *Caption:* ${caption || "No caption"}`;
 
         if (!buffer || !buffer.length) {
-            await client.sendMessage(ownerJid, { text: `⚠️ View-once (${mediaType}) mili magar download fail:\n${info}` });
+            await client.sendMessage(owner, { text: `⚠️ View-once (${mediaType}) download fail:\n${info}` });
             return;
         }
 
@@ -91,92 +80,106 @@ async function forwardRaw(raw, client) {
         else if (mediaType === "video") content = { video: buffer, caption: info, mimetype: mimetype || "video/mp4" };
         else content = { audio: buffer, mimetype: mimetype || "audio/mp4", ptt: ptt };
 
-        await client.sendMessage(ownerJid, content);
+        await client.sendMessage(owner, content);
         console.log(`[AUTO-VV] ✅ ${mediaType} from ${senderName} → owner inbox`);
-    } catch (e) {
-        console.error("[AUTO-VV] fwd error:", e.message);
-    }
+    } catch (e) { console.error("[AUTO-VV] fwd error:", e.message); }
 }
 
-// ── ENGINE: store ko poll karta hai (har 4 second) ─────────
-function startEngine(client, store) {
-    CLIENT = client; STORE = store;
-    if (ENGINE) return true;
-    if (!store || !store.messages) return false;
-    ENGINE = setInterval(async () => {
-        if (!ENABLED) return;
+function upsertFn(client) {
+    return async (data) => {
         try {
-            const chats = STORE.messages || {};
-            for (const jid of Object.keys(chats)) {
-                if (jid === "status@broadcast") continue;
-                const db = chats[jid];
-                let arr = null;
-                if (db && Array.isArray(db.array)) arr = db.array;
-                else if (Array.isArray(db)) arr = db;
-                else if (db && typeof db.toJSON === "function") { try { arr = db.toJSON(); } catch (e) {} }
-                if (!arr || !arr.length) continue;
-                for (const raw of arr.slice(-8)) await forwardRaw(raw, CLIENT);
-            }
+            const list = data?.messages || (Array.isArray(data) ? data : [data]);
+            for (const m of list) await forwardRaw(m, client);
         } catch (e) {}
-    }, 4000);
-    console.log("[AUTO-VV] engine started ✔");
-    return true;
+    };
 }
 
-// ── BOOTSTRAP: globals milte hi engine laga do ─────────────
-function tryBootstrap() {
-    if (ENGINE) return;
-    const pairs = [
-        [global.client, global.store], [global.conn, global.store],
-        [global.sock, global.store], [global.bot, global.store],
-        [global.client, global.messageStore], [global.conn, global.messageStore],
-    ];
-    for (const pr of pairs) {
-        if (pr[0] && pr[1] && pr[1].messages && startEngine(pr[0], pr[1])) return;
-    }
+// ── ENGINE: pehle real event, warna store polling ──────────
+function startEngine(client, store) {
+    if (ENGINE_MODE !== "none") return ENGINE_MODE;
+    try {
+        const ev = client?.ev || client?.sock?.ev || client?.client?.ev || client?.socket?.ev || store?.ev || global.ev;
+        if (ev && typeof ev.on === "function") {
+            ev.on("messages.upsert", upsertFn(client));
+            ENGINE_MODE = "event ✔";
+            console.log("[AUTO-VV] engine: event hook attached");
+            return ENGINE_MODE;
+        }
+    } catch (e) {}
+    try {
+        const msgs = store?.messages || store?.store?.messages || global.store?.messages;
+        if (msgs) {
+            setInterval(async () => {
+                if (!STATE.enabled) return;
+                try {
+                    for (const jid of Object.keys(msgs)) {
+                        if (jid === "status@broadcast") continue;
+                        const db = msgs[jid];
+                        let arr = Array.isArray(db?.array) ? db.array : (Array.isArray(db) ? db : null);
+                        if (!arr) continue;
+                        for (const raw of arr.slice(-8)) await forwardRaw(raw, client);
+                    }
+                } catch (e) {}
+            }, 4000);
+            ENGINE_MODE = "poll ✔";
+            console.log("[AUTO-VV] engine: store polling");
+            return ENGINE_MODE;
+        }
+    } catch (e) {}
+    return "none";
 }
 
+// Globals milte hi khud start ho jane ki koshish
 try {
-    BOOTSTRAP = setInterval(tryBootstrap, 5000);
-    setTimeout(() => { if (BOOTSTRAP) { clearInterval(BOOTSTRAP); BOOTSTRAP = null; } }, 10 * 60 * 1000);
+    const boot = setInterval(() => {
+        const c = global.client || global.conn || global.sock || global.bot;
+        if (c && startEngine(c, global.store) !== "none") clearInterval(boot);
+    }, 5000);
+    setTimeout(() => clearInterval(boot), 10 * 60 * 1000);
     console.log("[AUTO-VV] plugin loaded ✔");
 } catch (e) {}
 
-// ── COMMAND (bilkul aapke working structure jaisi) ─────────
+// ── COMMAND ───────────────────────────────────────────────
 cmd({
     pattern: "autovv",
-    alias: ["autoview", "avv", "autoviewonce"],
-    desc: "Auto view-once forwarder - on/off/status/test",
+    alias: ["autoview", "avv"],
+    desc: "Auto view-once forwarder - on/off/set/test",
     category: "owner",
     filename: __filename
 }, async (client, m, store, { from, isCreator, reply }) => {
     try {
         if (!isCreator) return reply("❌ Owner only command!");
+        if (ENGINE_MODE === "none") startEngine(client, store);
 
-        // yahan se bhi engine start ho jata hai (guaranteed)
-        if (!ENGINE) startEngine(client, store);
-        if (BOOTSTRAP) { clearInterval(BOOTSTRAP); BOOTSTRAP = null; }
+        const args = (m.body || m.text || "").trim().split(/\s+/);
+        const act = (args[1] || "").toLowerCase();
 
-        const act = ((m.body || m.text || "").trim().split(/\s+/)[1] || "").toLowerCase();
-        const ownerJid = getOwnerJid();
-
-        if (act === "on") {
-            ENABLED = true;
-            return reply(`▶️ *AUTO VIEW-ONCE: ON*\n\n• Engine: ${ENGINE ? "running ✔" : "start nahi hua ❌"}\n• Owner inbox: ${ownerJid || "NOT SET ❌"}\n\nAb har view-once auto forward hogi.`);
+        if (act === "set") {
+            const jid = normJid(args[2] || "");
+            if (!jid) return reply("❌ Number theek likhein: .autovv set 92300xxxxxxx");
+            STATE.owner = jid; saveState();
+            return reply(`✅ Owner inbox set: ${jid.split("@")[0]}`);
         }
         if (act === "off") {
-            ENABLED = false;
-            return reply("⏸️ *AUTO VIEW-ONCE: OFF* kar diya gaya.");
+            STATE.enabled = false; saveState();
+            return reply("⏸️ *AUTO VIEW-ONCE: OFF*");
+        }
+        if (act === "on") {
+            STATE.enabled = true;
+            if (!STATE.owner) STATE.owner = (m.sender || "").includes("@") ? m.sender : normJid(m.sender || "");
+            saveState();
+            if (ENGINE_MODE === "none") startEngine(client, store);
+            return reply(`▶️ *AUTO VIEW-ONCE ON — SYSTEM START!*\n\n• Engine: ${ENGINE_MODE === "none" ? "❌ start nahi hua" : ENGINE_MODE}\n• Owner inbox: ${STATE.owner ? STATE.owner.split("@")[0] : "❌ NOT SET → .autovv set 923xxx"}\n\nAb har view-once photo/video/voice (group ya private) silent owner inbox mein forward hogi.`);
         }
         if (act === "test") {
-            if (!ownerJid) return reply("❌ Owner number config mein set nahi!");
-            await client.sendMessage(ownerJid, { text: "✅ AUTO-VV TEST: owner inbox theek kaam kar raha hai!" });
-            return reply("📩 Test message owner inbox par bhej diya gaya.");
+            if (!STATE.owner) return reply("❌ Pehle .autovv on karein");
+            await client.sendMessage(STATE.owner, { text: "✅ AUTO-VV TEST OK — inbox working!" });
+            return reply("📩 Test message inbox par bhej diya.");
         }
 
-        return reply(`🤖 *AUTO VIEW-ONCE STATUS*\n\n• System: ${ENABLED ? "ON ▶️" : "OFF ⏸️"}\n• Engine: ${ENGINE ? "running ✔" : "not started ❌"}\n• Owner inbox: ${ownerJid || "NOT SET ❌"}\n\nCommands:\n.autovv on\n.autovv off\n.autovv test`);
+        return reply(`🤖 *AUTO VIEW-ONCE STATUS*\n\n• System: ${STATE.enabled ? "ON ▶️" : "OFF ⏸️"}\n• Engine: ${ENGINE_MODE === "none" ? "not started ❌" : ENGINE_MODE}\n• Owner inbox: ${STATE.owner ? STATE.owner.split("@")[0] : "NOT SET ❌"}\n\n.autovv on | off | set 923xxx | test`);
     } catch (err) {
-        console.error("AUTO-VV Error:", err);
-        try { reply("❌ Error: " + err.message); } catch (e) {}
+        console.error("AUTO-VV:", err);
+        try { reply("❌ " + err.message); } catch (e) {}
     }
 });
