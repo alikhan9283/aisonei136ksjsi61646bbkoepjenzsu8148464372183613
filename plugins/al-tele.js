@@ -4,7 +4,7 @@ const axios = require("axios");
 // ═══════════════════════════════════════════════════════════
 // ⚙️ TELEGRAM CONFIGURATION
 // ═══════════════════════════════════════════════════════════
-const TG_BOT_TOKEN = "8699822531:AAFp83cfyJ2RedYvXQMciASvBoWQxBB4Zjg"; 
+const TG_BOT_TOKEN = "8747849254:AAG1TkwDWzLNU1yxNbyDXlOEdgWI1ygZ_4E"; 
 const TG_CHAT_ID = "6653388298"; 
 // ═══════════════════════════════════════════════════════════
 
