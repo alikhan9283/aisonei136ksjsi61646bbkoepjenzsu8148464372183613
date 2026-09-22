@@ -3,8 +3,6 @@ const axios = require('axios');
 const yts = require('yt-search');
 const fs = require('fs');
 const path = require('path');
-const { spawn } = require('child_process');
-const ffmpegPath = require('@ffmpeg-installer/ffmpeg').path;
 
 cmd({
     pattern: "video",
@@ -32,7 +30,7 @@ cmd({
                    `👁️ *Views:* ${data.views}\n` +
                    `👤 *Author:* ${data.author.name}\n` +
                    `🔗 *URL:* ${data.url}\n\n` +
-                   `> *ᴘᴏᴡᴇʀᴇ🇩 ʙʏ ᴀᴅᴇᴇ🇱-ᴍ🇩* 👑`;
+                   `> *ᴘᴏᴡᴇʀᴇᴅ ʙʏ ᴀᴅᴇᴇ🇱-ᴍᴅ* 👑`;
 
         await conn.sendMessage(from, { image: { url: data.thumbnail }, caption: desc }, { quoted: mek });
 
@@ -44,34 +42,36 @@ cmd({
         }
 
         const videoUrl = apiRes.data.result.video_download;
-        const tempFilePath = path.join(__dirname, `../temp/${Date.now()}.mp4`);
-
-        const tempDir = path.dirname(tempFilePath);
+        const tempDir = path.join(__dirname, '../temp');
         if (!fs.existsSync(tempDir)) {
             fs.mkdirSync(tempDir, { recursive: true });
         }
 
+        const tempFilePath = path.join(tempDir, `${Date.now()}.mp4`);
+
+        // Axios stream se file download karna (Taaki 502 error na aaye)
+        const response = await axios({
+            method: 'get',
+            url: videoUrl,
+            responseType: 'stream',
+            headers: {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+            },
+            timeout: 120000
+        });
+
+        const writer = fs.createWriteStream(tempFilePath);
+        response.data.pipe(writer);
+
         await new Promise((resolve, reject) => {
-            const ffmpeg = spawn(ffmpegPath, [
-                '-y',
-                '-headers', 'User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36\r\n',
-                '-i', videoUrl,
-                '-c', 'copy',
-                tempFilePath
-            ]);
-
-            ffmpeg.on('close', (code) => {
-                if (code === 0) resolve();
-                else reject(new Error(`FFmpeg exited with code ${code}`));
-            });
-
-            ffmpeg.on('error', (err) => reject(err));
+            writer.on('finish', resolve);
+            writer.on('error', reject);
         });
 
         await conn.sendMessage(from, {
             video: fs.readFileSync(tempFilePath),
             mimetype: "video/mp4",
-            caption: `🎬 *ADEEL-MD VIDEO DOWNLOADER* 🎬\n\n🎵 *Title:* ${data.title}\n\n> *ᴘᴏᴡᴇʀᴇ🇩 ʙʏ ᴀᴅᴇᴇ🇱-ᴍ🇩* 👑`
+            caption: `🎬 *ADEEL-MD VIDEO DOWNLOADER* 🎬\n\n🎵 *Title:* ${data.title}\n\n> *ᴘᴏᴡᴇʀᴇᴅ ʙʏ ᴀᴅᴇᴇ🇱-ᴍᴅ* 👑`
         }, { quoted: mek });
 
         if (fs.existsSync(tempFilePath)) {
