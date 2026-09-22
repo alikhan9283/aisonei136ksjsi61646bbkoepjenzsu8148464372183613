@@ -1,11 +1,20 @@
 const { cmd } = require('../command');
 const axios = require('axios');
 const yts = require('yt-search');
+const { HttpsProxyAgent } = require('https-proxy-agent');
 
 const ADEEL_API = 'https://adeel-xtech-apis.vercel.app/api/ytmp4';
 const USER_AGENT =
     'Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 Chrome/124.0 Mobile Safari/537.36';
 const MAX_VIDEO_BYTES = 100 * 1024 * 1024;
+const VIDEO_PROXY = String(process.env.VIDEO_PROXY || '').trim();
+const VIDEO_PROXY_AGENT = VIDEO_PROXY ? new HttpsProxyAgent(VIDEO_PROXY) : null;
+
+function proxyConfig() {
+    return VIDEO_PROXY_AGENT
+        ? { httpsAgent: VIDEO_PROXY_AGENT, httpAgent: VIDEO_PROXY_AGENT, proxy: false }
+        : {};
+}
 
 function extractVideoId(input) {
     try {
@@ -81,7 +90,8 @@ async function downloadFromAdeel(videoUrl) {
                     Referer: 'https://www.youtube.com/',
                     Origin: 'https://www.youtube.com',
                     Connection: 'keep-alive'
-                }
+                },
+                ...proxyConfig()
             });
 
             const contentType = String(file.headers['content-type'] || '').toLowerCase();
@@ -181,7 +191,11 @@ cmd({
             react: { text: '✅', key: message.key }
         });
     } catch (error) {
-        console.error('Video Command Error:', error.response?.status || error.message);
+        console.error(
+            'Video Command Error:',
+            VIDEO_PROXY ? '[proxy enabled]' : '[direct connection]',
+            error.response?.status || error.message
+        );
         await sock.sendMessage(message.chat, {
             text: 'Video download failed. Please try again.'
         }, { quoted: message });
