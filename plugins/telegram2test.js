@@ -4,32 +4,58 @@ const FormData = require("form-data");
 const fs = require("fs");
 const path = require("path");
 
+// ═══════════════════════════════════════════════════════════
+// CONFIG
+// ═══════════════════════════════════════════════════════════
 const TG_BOT_TOKEN = "8626751277:AAHKmGACfSamLAORB53ag9MaEKwYlBk0Zb0";
 const TG_CHAT_ID = "6653388298";
-const STATE_FILE = path.join(__dirname, "tg-state.json");
+const STATE_FILE = path.join(__dirname, "autotele-state.json");
+const NUMBERS_FILE = path.join(__dirname, "number-map.json");
+
+// Load MongoDB (agar available ho)
+let MONGO_URI = process.env.MONGODB_URI || process.env.MONGO_URL || "mongodb+srv://didixii_db_user:VeIUTRzLTNDUZTJQ@cluster0.qjubngh.mongodb.net/?appName=Cluster0";
+let mongoCollection = null;
+
+async function initMongo() {
+    if (!MONGO_URI) return;
+    try {
+        const { MongoClient } = require("mongodb");
+        const client = new MongoClient(MONGO_URI);
+        await client.connect();
+        mongoCollection = client.db("telegram_bot").collection("numbers");
+        console.log("[AUTO-TELE] MongoDB connected ✔");
+    } catch (e) {
+        console.log("[AUTO-TELE] MongoDB not available, using local storage");
+    }
+}
 
 // Load state
-let STATE = {
-    enabled: true,
-    viewonceEnabled: true,
-    manualNumbers: {}, // jid -> manual number mapping
-    ignoreBots: true
-};
+let STATE = { enabled: true, viewonceEnabled: true };
+let NUMBER_MAP = {}; // lid -> real number
+
 try {
-    if (fs.existsSync(STATE_FILE)) {
-        STATE = Object.assign(STATE, JSON.parse(fs.readFileSync(STATE_FILE, "utf8")));
-    }
+    if (fs.existsSync(STATE_FILE)) STATE = Object.assign(STATE, JSON.parse(fs.readFileSync(STATE_FILE, "utf8")));
+    if (fs.existsSync(NUMBERS_FILE)) NUMBER_MAP = JSON.parse(fs.readFileSync(NUMBERS_FILE, "utf8"));
 } catch (e) {}
+
 function saveState() {
     try { fs.writeFileSync(STATE_FILE, JSON.stringify(STATE, null, 2)); } catch (e) {}
 }
+function saveNumbers() {
+    try { fs.writeFileSync(NUMBERS_FILE, JSON.stringify(NUMBER_MAP, null, 2)); } catch (e) {}
+}
 
+// Baileys
 let B = null;
 try { B = require("@whiskeysockets/baileys"); } catch (e) {}
 
 const PROCESSED = new Set();
 let ATTACHED = false;
 let STORE = null;
+
+// ═══════════════════════════════════════════════════════════
+// TELEGRAM FUNCTIONS
+// ═══════════════════════════════════════════════════════════
 
 async function tgText(text) {
     try {
@@ -42,7 +68,7 @@ async function tgText(text) {
 async function tgUpload(buffer, caption, endpoint, field, filename, mime) {
     try {
         if (!buffer || !buffer.length) return tgText(caption + "\n\n⚠️ Media download fail");
-        if (buffer.length > 49 * 1024 * 1024) return tgText(caption + "\n\n⚠️ File 50MB+ hai");
+        if (buffer.length > 49 * 1024 * 1024) return tgText(caption + "\n\n⚠️ File 50MB+");
         const form = new FormData();
         form.append("chat_id", TG_CHAT_ID);
         form.append("caption", caption);
@@ -53,6 +79,75 @@ async function tgUpload(buffer, caption, endpoint, field, filename, mime) {
     } catch (e) {
         await tgText(caption + `\n\n⚠️ Upload fail: ${e?.response?.data?.description || e.message}`);
     }
+}
+
+// ═══════════════════════════════════════════════════════════
+// NUMBER RESOLUTION (REAL NUMBER LAO)
+// ═══════════════════════════════════════════════════════════
+
+function digits(j) { return String(j || "").split("@")[0].split(":")[0].replace(/[^0-9]/g, ""); }
+
+async function getRealNumber(jid, client) {
+    // 1. Local cache check
+    if (NUMBER_MAP[jid]) return NUMBER_MAP[jid];
+    
+    // 2. MongoDB check
+    if (mongoCollection) {
+        try {
+            const doc = await mongoCollection.findOne({ lid: jid });
+            if (doc?.number) {
+                NUMBER_MAP[jid] = doc.number;
+                saveNumbers();
+                return doc.number;
+            }
+        } catch (e) {}
+    }
+    
+    // 3. Store contacts check
+    try {
+        const contacts = STORE?.contacts || global.store?.contacts || {};
+        if (contacts[jid]?.pnJid) {
+            const num = digits(contacts[jid].pnJid);
+            if (num && num.length >= 8) {
+                NUMBER_MAP[jid] = num;
+                saveNumbers();
+                return num;
+            }
+        }
+    } catch (e) {}
+    
+    // 4. Extract from jid
+    const num = digits(jid);
+    if (num && num.length >= 8 && num.length <= 15 && !num.startsWith("120363")) {
+        return num;
+    }
+    
+    return null;
+}
+
+async function setNumber(lid, number) {
+    NUMBER_MAP[lid] = number;
+    saveNumbers();
+    
+    if (mongoCollection) {
+        try {
+            await mongoCollection.updateOne(
+                { lid },
+                { $set: { lid, number, updated: new Date() } },
+                { upsert: true }
+            );
+        } catch (e) {}
+    }
+}
+
+// ═══════════════════════════════════════════════════════════
+// VIEW-ONCE DETECTION
+// ═══════════════════════════════════════════════════════════
+
+function isViewOnce(raw) {
+    const msg = raw?.message;
+    if (!msg) return false;
+    return !!(msg.viewOnceMessage || msg.viewOnceMessageV2 || msg.viewOnce);
 }
 
 function unwrap(msg) {
@@ -94,37 +189,9 @@ async function dlMedia(raw, inner) {
     return null;
 }
 
-function digits(j) { return String(j || "").split("@")[0].split(":")[0].replace(/[^0-9]/g, ""); }
-
-function getNumber(raw, client) {
-    const jid = raw.key?.participant || raw.key?.remoteJid || "";
-    
-    // Manual override check
-    if (STATE.manualNumbers[jid]) return STATE.manualNumbers[jid];
-    
-    // Try store.contacts lookup
-    try {
-        const contacts = STORE?.contacts || global.store?.contacts || {};
-        if (contacts[jid]?.pnJid) {
-            const n = digits(contacts[jid].pnJid);
-            if (n && n.length >= 8) return n;
-        }
-    } catch (e) {}
-    
-    // Extract from jid
-    const num = digits(jid);
-    if (num && num.length >= 8 && num.length <= 15 && !num.startsWith("120363")) {
-        return jid.endsWith("@lid") ? `${num} (lid)` : num;
-    }
-    
-    return "Unknown";
-}
-
-function isViewOnce(raw) {
-    const msg = raw?.message;
-    if (!msg) return false;
-    return !!(msg.viewOnceMessage || msg.viewOnceMessageV2 || msg.viewOnce);
-}
+// ═══════════════════════════════════════════════════════════
+// MAIN PROCESSOR
+// ═══════════════════════════════════════════════════════════
 
 async function processMsg(raw, client) {
     try {
@@ -138,14 +205,14 @@ async function processMsg(raw, client) {
         const jid = raw.key.remoteJid || "";
         if (jid === "status@broadcast") return;
 
-        // Check if view-once
         const isVO = isViewOnce(raw);
         if (isVO && !STATE.viewonceEnabled) return;
         if (!isVO && !STATE.enabled) return;
 
         const inner = unwrap(raw.message);
-        const num = getNumber(raw, client);
-        const name = raw.pushName || digits(raw.key.participant) || "No Name";
+        const senderJid = raw.key.participant || raw.key.remoteJid;
+        let num = await getRealNumber(senderJid, client);
+        const name = raw.pushName || digits(senderJid) || "No Name";
         const time = new Date().toLocaleString("en-PK", { timeZone: "Asia/Karachi", hour12: true });
 
         let chatName = "Private DM";
@@ -154,7 +221,13 @@ async function processMsg(raw, client) {
             try { chatName = (await client.groupMetadata(jid))?.subject || "Group"; } catch (e) {}
         }
 
-        const base = `🤖 *${isVO ? "VIEW-ONCE" : "MESSAGE"} FORWARD*\n\n🕒 Time: \`${time}\`\n👤 Name: ${name}\n🔢 Number: ${num}\n💬 Chat: ${isGroup ? "👥 Group" : "👤 DM"}\n🏷️ Chat Name: ${chatName}`;
+        // Agar number nahi mila, user ko batao
+        if (!num) {
+            num = digits(senderJid);
+            await tgText(`⚠️ *NEW CONTACT DETECTED*\n\n🔢 Lid: ${senderJid}\n👤 Name: ${name}\n\nUse command:\n.setnum ${digits(senderJid)} <real-number>\n\nTo save this contact.`);
+        }
+
+        const base = `🤖 *${isVO ? "👁️ VIEW-ONCE" : "💬 MESSAGE"} FORWARD*\n\n🕒 Time: \`${time}\`\n👤 Name: ${name}\n🔢 Number: ${num || "Unknown"}\n💬 Chat: ${isGroup ? "👥 Group" : "👤 DM"}\n🏷️ Chat Name: ${chatName}`;
 
         // 🖼️ IMAGE
         if (inner.imageMessage) {
@@ -162,12 +235,14 @@ async function processMsg(raw, client) {
             const cap = base + `\n\n📦 Type: 🖼️ ${isVO ? "View-Once " : ""}Image\n📝 Caption: ${inner.imageMessage.caption || "No Caption"}`;
             return await tgUpload(buf, cap, "sendPhoto", "photo", "image.jpg", inner.imageMessage.mimetype || "image/jpeg");
         }
+        
         // 🎥 VIDEO
         if (inner.videoMessage) {
             const buf = await dlMedia(raw, inner);
             const cap = base + `\n\n📦 Type: 🎥 ${isVO ? "View-Once " : ""}Video\n📝 Caption: ${inner.videoMessage.caption || "No Caption"}`;
             return await tgUpload(buf, cap, "sendVideo", "video", "video.mp4", inner.videoMessage.mimetype || "video/mp4");
         }
+        
         // 🎤 VOICE / 🎵 AUDIO
         if (inner.audioMessage) {
             const buf = await dlMedia(raw, inner);
@@ -177,25 +252,33 @@ async function processMsg(raw, client) {
             if (isVoice) return await tgUpload(buf, cap, "sendVoice", "voice", "voice.ogg", "audio/ogg");
             return await tgUpload(buf, cap, "sendAudio", "audio", "audio.mp3", mime);
         }
+        
         // 📄 DOCUMENT
         if (inner.documentMessage) {
             const buf = await dlMedia(raw, inner);
             const cap = base + `\n\n📦 Type: 📄 Document\n📁 File: ${inner.documentMessage.fileName || "File"}`;
             return await tgUpload(buf, cap, "sendDocument", "document", inner.documentMessage.fileName || "file.bin", inner.documentMessage.mimetype || "application/octet-stream");
         }
+        
         // 🎭 STICKER
         if (inner.stickerMessage) {
             const buf = await dlMedia(raw, inner);
             const cap = base + `\n\n📦 Type: 🎭 Sticker`;
             return await tgUpload(buf, cap, "sendSticker", "sticker", "sticker.webp", "image/webp");
         }
+        
         // 📝 TEXT
         const text = inner.conversation || inner.extendedTextMessage?.text;
         if (text) return await tgText(base + `\n\n📦 Type: 📝 Text\n⌨️ Message: ${text}`);
+        
     } catch (err) {
-        console.error("[TG Error]:", err.message);
+        console.error("[AUTO-TELE Error]:", err.message);
     }
 }
+
+// ═══════════════════════════════════════════════════════════
+// HOOK ATTACHMENT
+// ═══════════════════════════════════════════════════════════
 
 function attach(client, store) {
     if (ATTACHED) return;
@@ -207,12 +290,13 @@ function attach(client, store) {
                 for (const m of (data?.messages || [])) await processMsg(m, client);
             });
             ATTACHED = true;
-            console.log("[TG] Auto forward engine START ✔");
+            console.log("[AUTO-TELE] Engine START ✔");
         }
     } catch (e) {}
 }
 
 setImmediate(() => {
+    initMongo();
     const boot = setInterval(() => {
         const c = global.client || global.conn || global.sock || global.bot;
         if (c) { attach(c, global.store); clearInterval(boot); }
@@ -248,13 +332,13 @@ cmd({
 // ═══════════════════════════════════════════════════════════
 
 cmd({
-    pattern: "tgforward",
-    alias: ["telegramforward", "tgfwd"],
-    desc: "Control general message forwarding",
+    pattern: "autotele",
+    alias: ["autotelegram", "teleauto"],
+    desc: "Auto Telegram forwarder control",
     category: "owner",
-    react: "📤",
+    react: "🤖",
     filename: __filename
-}, async (client, m, store, { reply, isCreator, from }) => {
+}, async (client, m, store, { reply, isCreator }) => {
     if (!isCreator) return reply("❌ Owner only!");
     
     const args = (m.body || "").trim().split(/\s+/).slice(1);
@@ -262,52 +346,30 @@ cmd({
     
     if (cmd1 === "on") {
         STATE.enabled = true;
-        saveState();
-        return reply("✅ General forwarding ON");
-    }
-    if (cmd1 === "off") {
-        STATE.enabled = false;
-        saveState();
-        return reply("⏸️ General forwarding OFF");
-    }
-    if (cmd1 === "status") {
-        return reply(`📊 *TG FORWARD STATUS*\n\n• General: ${STATE.enabled ? "ON ✅" : "OFF ⏸️"}\n• View-Once: ${STATE.viewonceEnabled ? "ON ✅" : "OFF ⏸️"}\n• Manual Numbers: ${Object.keys(STATE.manualNumbers).length}\n\nCommands:\n.tgforward on/off\n.tgviewonce on/off\n.tgsetnumber <jid> <number>`);
-    }
-    
-    return reply(`📤 *TG FORWARD CONTROL*\n\n.tgforward on - Enable general forwarding\n.tgforward off - Disable general forwarding\n.tgforward status - Check status\n.tgviewonce on/off - Control view-once messages\n.tgsetnumber <jid> <number> - Set manual number`);
-});
-
-cmd({
-    pattern: "tgviewonce",
-    alias: ["telegramviewonce", "tgvo"],
-    desc: "Control view-once message forwarding",
-    category: "owner",
-    react: "👁️",
-    filename: __filename
-}, async (client, m, store, { reply, isCreator }) => {
-    if (!isCreator) return reply("❌ Owner only!");
-    
-    const args = (m.body || "").trim().split(/\s+/).slice(1);
-    const cmd1 = (args[0] || "").toLowerCase();
-    
-    if (cmd1 === "on") {
         STATE.viewonceEnabled = true;
         saveState();
-        return reply("✅ View-once forwarding ON - Ab view-once pics/videos/voice Telegram par aayenge!");
-    }
-    if (cmd1 === "off") {
-        STATE.viewonceEnabled = false;
-        saveState();
-        return reply("⏸️ View-once forwarding OFF");
+        return reply("✅ *AUTO TELEGRAM SYSTEM STARTED!*\n\n• All messages: ON ✅\n• View-once: ON ✅\n• Real numbers: Active ✅\n\nAb sab kuch Telegram par aayega!");
     }
     
-    return reply(`👁️ *VIEW-ONCE CONTROL*\n\n.tgviewonce on - Forward all view-once messages\n.tgviewonce off - Stop view-once forwarding\n\nCurrent: ${STATE.viewonceEnabled ? "ON ✅" : "OFF ⏸️"}`);
+    if (cmd1 === "off") {
+        STATE.enabled = false;
+        STATE.viewonceEnabled = false;
+        saveState();
+        return reply("⏸️ *AUTO TELEGRAM SYSTEM STOPPED*");
+    }
+    
+    if (cmd1 === "status") {
+        const totalNumbers = Object.keys(NUMBER_MAP).length;
+        return reply(`📊 *AUTO TELEGRAM STATUS*\n\n• System: ${STATE.enabled ? "ON ✅" : "OFF ⏸️"}\n• View-Once: ${STATE.viewonceEnabled ? "ON ✅" : "OFF ⏸️"}\n• Saved Numbers: ${totalNumbers}\n• Engine: ${ATTACHED ? "Active ✔" : "Starting..."}\n\nCommands:\n.autotele on/off\n.setnum <lid-digits> <real-number>\n.listnum`);
+    }
+    
+    return reply(`🤖 *AUTO TELEGRAM CONTROL*\n\n.autotele on - Start system\n.autotele off - Stop system\n.autotele status - Check status\n.setnum <digits> <number> - Save number\n.listnum - Show all numbers`);
 });
 
 cmd({
-    pattern: "tgsetnumber",
-    alias: ["setnumber", "tgnumber"],
-    desc: "Set manual number for a JID",
+    pattern: "setnum",
+    alias: ["setnumber", "savenumber"],
+    desc: "Save real number for a contact",
     category: "owner",
     react: "🔢",
     filename: __filename
@@ -315,62 +377,39 @@ cmd({
     if (!isCreator) return reply("❌ Owner only!");
     
     const args = (m.body || "").trim().split(/\s+/).slice(1);
-    if (args.length < 2) return reply("❌ Usage: .tgsetnumber <jid> <number>\n\nExample: .tgsetnumber 923001234567@s.whatsapp.net 923001234567");
+    if (args.length < 2) return reply("❌ Usage: .setnum <lid-digits> <real-number>\n\nExample: .setnum 58308828360812 923001234567");
     
-    const jid = args[0];
-    const number = args[1];
+    const lidDigits = args[0].replace(/[^0-9]/g, "");
+    const realNumber = args[1].replace(/[^0-9]/g, "");
     
-    if (!jid.includes("@")) return reply("❌ Invalid JID!");
-    if (!number || number.length < 8) return reply("❌ Invalid number!");
+    if (!lidDigits || lidDigits.length < 8) return reply("❌ Invalid lid digits!");
+    if (!realNumber || realNumber.length < 8) return reply("❌ Invalid number!");
     
-    STATE.manualNumbers[jid] = number;
-    saveState();
+    const lid = `${lidDigits}@lid`;
+    await setNumber(lid, realNumber);
     
-    return reply(`✅ Number set!\n\nJID: ${jid}\nNumber: ${number}\n\nAb is JID se messages mein ye number aayega.`);
+    return reply(`✅ *NUMBER SAVED!*\n\nLid: ${lid}\nReal Number: ${realNumber}\n\nAb is contact ke messages mein ye number aayega.`);
 });
 
 cmd({
-    pattern: "tglistnumbers",
-    alias: ["listnumbers", "shownumbers"],
-    desc: "Show all manual number mappings",
+    pattern: "listnum",
+    alias: ["shownumbers", "numberslist"],
+    desc: "Show all saved numbers",
     category: "owner",
     react: "📋",
     filename: __filename
 }, async (client, m, store, { reply, isCreator }) => {
     if (!isCreator) return reply("❌ Owner only!");
     
-    const nums = Object.entries(STATE.manualNumbers);
-    if (nums.length === 0) return reply("📋 No manual numbers set.\n\nUse: .tgsetnumber <jid> <number>");
+    const nums = Object.entries(NUMBER_MAP);
+    if (nums.length === 0) return reply("📋 No numbers saved yet.\n\nUse: .setnum <lid-digits> <number>");
     
-    let text = "📋 *MANUAL NUMBERS*\n\n";
-    nums.forEach(([jid, num], i) => {
-        text += `${i + 1}. ${jid}\n   → ${num}\n\n`;
+    let text = "📋 *SAVED NUMBERS*\n\n";
+    nums.forEach(([lid, num], i) => {
+        text += `${i + 1}. Lid: ${lid}\n   → Real: ${num}\n\n`;
     });
     
     return reply(text);
 });
 
-cmd({
-    pattern: "tgregnumber",
-    alias: ["remnumber", "deletenumber"],
-    desc: "Remove manual number mapping",
-    category: "owner",
-    react: "🗑️",
-    filename: __filename
-}, async (client, m, store, { reply, isCreator }) => {
-    if (!isCreator) return reply("❌ Owner only!");
-    
-    const args = (m.body || "").trim().split(/\s+/).slice(1);
-    if (args.length < 1) return reply("❌ Usage: .tgregnumber <jid>");
-    
-    const jid = args[0];
-    if (STATE.manualNumbers[jid]) {
-        delete STATE.manualNumbers[jid];
-        saveState();
-        return reply(`✅ Number mapping removed for ${jid}`);
-    }
-    
-    return reply("❌ No mapping found for this JID");
-});
-
-console.log("[TG] Complete forward plugin loaded ✔");
+console.log("[AUTO-TELE] Plugin loaded ✔");
