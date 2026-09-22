@@ -13,67 +13,82 @@ try { if (fs.existsSync(MAP_FILE)) NUMMAP = JSON.parse(fs.readFileSync(MAP_FILE,
 const saveMap = () => { try { fs.writeFileSync(MAP_FILE, JSON.stringify(NUMMAP, null, 1)); } catch (e) {} };
 
 let ON = true, CLIENT = null, STORE = null;
-let pollOn = false, hookOn = false, SEEN = 0, LASTERR = "";
+let pollOn = false, hookOn = false, SEEN = 0, VO = 0, LASTERR = "";
 const DONE = new Set();
 
-// ── Telegram ──
 async function tgText(t) { try { await axios.post(`https://api.telegram.org/bot${TG_TOKEN}/sendMessage`, { chat_id: TG_CHAT, text: t, parse_mode: "Markdown" }, { timeout: 10000 }); } catch (e) { LASTERR = "tg: " + e.message; } }
 async function tgUp(buf, cap, ep, field, fname, mime) {
     try {
-        if (!buf?.length) return tgText(cap + "\n\n⚠️ Download fail");
+        if (!buf?.length) { LASTERR = "download empty (" + ep + ")"; return tgText(cap + "\n\n⚠️ Media download fail"); }
         if (buf.length > 49 * 1024 * 1024) return tgText(cap + "\n\n⚠️ 50MB+ file");
         const f = new FormData();
         f.append("chat_id", TG_CHAT); f.append("caption", cap);
         f.append(field, buf, { filename: fname, contentType: mime });
         await axios.post(`https://api.telegram.org/bot${TG_TOKEN}/${ep}`, f, { headers: f.getHeaders(), timeout: 90000, maxBodyLength: Infinity });
-    } catch (e) { LASTERR = "up: " + e.message; await tgText(cap + "\n\n⚠️ Upload fail"); }
+    } catch (e) { LASTERR = "up: " + e.message; await tgText(cap + "\n\n⚠️ Upload fail: " + (e?.response?.data?.description || e.message)); }
 }
 
-// ── Media nikalo (view-once wrapper samet) ──
 function gct(m) { return m ? Object.keys(m).find(k => !["senderKeyDistributionMessage", "messageContextInfo"].includes(k)) : null; }
+
 function getMedia(raw) {
     let msg = raw?.message; if (!msg) return null;
     let t = gct(msg);
     if (t === "ephemeralMessage") { msg = msg[t].message || msg; t = gct(msg); }
     let vo = false;
-    if (t === "viewOnceMessage" || t === "viewOnceMessageV2") { vo = true; msg = msg[t].message || {}; t = gct(msg); }
-    const o = t ? msg[t] : null;
+    if (t === "viewOnceMessage" || t === "viewOnceMessageV2" || t === "viewOnceMessageV2Extension") {
+        vo = true; msg = msg[t].message || {}; t = gct(msg);
+    }
+    if (!t) return null;
+    if (t === "conversation") return { type: "text", text: msg.conversation || "", vo };
+    if (t === "extendedTextMessage") return { type: "text", text: msg.extendedTextMessage?.text || "", vo };
+    const o = msg[t];
     if (!o || typeof o !== "object") return null;
-    if (["imageMessage", "videoMessage", "audioMessage", "documentMessage", "stickerMessage"].includes(t)) return { type: t.replace("Message", ""), o, vo };
-    if (t === "conversation" || t === "extendedTextMessage") return { type: "text", o, vo: false };
+    if (t === "imageMessage") return { type: "image", o, vo };
+    if (t === "videoMessage") return { type: "video", o, vo };
+    if (t === "audioMessage") return { type: "audio", o, vo };
+    if (t === "documentMessage") return { type: "document", o, vo };
+    if (t === "stickerMessage") return { type: "sticker", o, vo };
     return null;
 }
 
-// ── Download: base ka proven method pehle ──
+// ── DOWNLOAD: base lib/msg.js wali shape SAB SE PEHLE ──────
 async function dl(raw, media) {
-    if (CLIENT?.downloadMediaMessage) {
-        try { const b = await CLIENT.downloadMediaMessage(media.o); if (b?.length) return b; } catch (e) {}
-        try { const b = await CLIENT.downloadMediaMessage(raw); if (b?.length) return b; } catch (e) {}
+    const inner = media.o;
+    const shapes = [
+        { type: media.type + "Message", msg: inner },   // ← lib/msg.js proven shape
+        inner,                                           // bare inner object
+        raw                                              // full WAMessage
+    ];
+    if (CLIENT && typeof CLIENT.downloadMediaMessage === "function") {
+        for (const s of shapes) { try { const b = await CLIENT.downloadMediaMessage(s); if (b?.length) return b; } catch (e) {} }
     }
     if (typeof raw?.download === "function") { try { const b = await raw.download(); if (b?.length) return b; } catch (e) {} }
     try {
         const B = require("@whiskeysockets/baileys");
-        const st = await B.downloadContentFromMessage(media.o, media.type === "sticker" ? "image" : media.type);
+        const st = await B.downloadContentFromMessage(inner, media.type === "sticker" ? "image" : media.type);
         let buf = Buffer.from([]); for await (const c of st) buf = Buffer.concat([buf, c]);
         if (buf.length) return buf;
+    } catch (e) {}
+    try {
+        const B = require("@whiskeysockets/baileys");
+        const b = await B.downloadMediaMessage(raw, "buffer", {});
+        if (b?.length) return b;
     } catch (e) {}
     return null;
 }
 
-// ── Number ──
 const dig = j => String(j || "").split("@")[0].split(":")[0].replace(/[^0-9]/g, "");
 async function num(senderJid) {
     const d = dig(senderJid); if (!d) return "Unknown";
     if (NUMMAP[d]) return NUMMAP[d];
     try {
         const c = STORE?.contacts?.[senderJid];
-        const pd = dig(c?.pnJid || (c?.jid?.endsWith("@s.whatsapp.net") ? c.jid : ""));
+        const pd = dig(c?.pnJid || (String(c?.jid || "").endsWith("@s.whatsapp.net") ? c.jid : ""));
         if (pd && pd !== d && pd.length >= 8) { NUMMAP[d] = pd; saveMap(); return pd; }
     } catch (e) {}
     return (d.length >= 8 && d.length <= 15 && !d.startsWith("120363")) ? d : "Unknown";
 }
 
-// ── Process ─
 async function proc(raw, client) {
     try {
         if (!ON || !raw?.key?.id || !raw?.message || raw.key.fromMe) return;
@@ -81,6 +96,8 @@ async function proc(raw, client) {
         const jid = raw.key.remoteJid || ""; if (jid === "status@broadcast") return;
         const media = getMedia(raw); if (!media) return;
         SEEN++; CLIENT = client;
+        if (media.vo) { VO++; console.log("[TGSTORE] VIEW-ONCE pakra:", media.type); }
+
         const sender = raw.key.participant || jid;
         const number = await num(sender);
         const name = raw.pushName || dig(sender) || "No Name";
@@ -90,7 +107,11 @@ async function proc(raw, client) {
         if (isG) { try { chat = (await client.groupMetadata(jid))?.subject || "Group"; } catch (e) {} }
         const base = `🤖 *${media.vo ? "👁️ VIEW-ONCE " : ""}FORWARD*\n\n🕒 Time: \`${time}\`\n👤 Name: ${name}\n🔢 Number: ${number}\n💬 Chat: ${isG ? "👥 Group" : "👤 DM"}\n🏷️ Chat Name: ${chat}`;
 
-        if (media.type === "image") return tgUp(await dl(raw, media), base + `\n\n📦 Type: ️ Image\n Caption: ${media.o.caption || "No Caption"}`, "sendPhoto", "photo", "img.jpg", media.o.mimetype || "image/jpeg");
+        if (media.type === "text") {
+            if (media.text) return await tgText(base + `\n\n📦 Type: 📝 Text\n✍️ Message: ${media.text}`);
+            return;
+        }
+        if (media.type === "image") return tgUp(await dl(raw, media), base + `\n\n📦 Type: 🖼️ Image\n📝 Caption: ${media.o.caption || "No Caption"}`, "sendPhoto", "photo", "img.jpg", media.o.mimetype || "image/jpeg");
         if (media.type === "video") return tgUp(await dl(raw, media), base + `\n\n📦 Type: 🎥 Video\n Caption: ${media.o.caption || "No Caption"}`, "sendVideo", "video", "vid.mp4", media.o.mimetype || "video/mp4");
         if (media.type === "audio") {
             const mime = media.o.mimetype || "audio/mp4";
@@ -98,16 +119,12 @@ async function proc(raw, client) {
             const cap = base + `\n\n📦 Type: ${voice ? "🎤 Voice" : "🎵 Audio"}`;
             return voice ? tgUp(await dl(raw, media), cap, "sendVoice", "voice", "v.ogg", "audio/ogg") : tgUp(await dl(raw, media), cap, "sendAudio", "audio", "a.mp4", mime);
         }
-        if (media.type === "document") return tgUp(await dl(raw, media), base + `\n\n📦 Type:  Document\n File: ${media.o.fileName || "File"}`, "sendDocument", "document", media.o.fileName || "file.bin", media.o.mimetype || "application/octet-stream");
-        if (media.type === "sticker") return tgUp(await dl(raw, media), base + `\n\n📦 Type:  Sticker`, "sendSticker", "sticker", "s.webp", "image/webp");
-        if (media.type === "text") {
-            const t = media.o.text || media.o.conversation || "";
-            if (t) return tgText(base + `\n\n📦 Type: 📝 Text\n️ Message: ${t}`);
-        }
-    } catch (e) { LASTERR = e.message; }
+        if (media.type === "document") return tgUp(await dl(raw, media), base + `\n\n📦 Type: 📄 Document\n File: ${media.o.fileName || "File"}`, "sendDocument", "document", media.o.fileName || "file.bin", media.o.mimetype || "application/octet-stream");
+        if (media.type === "sticker") return tgUp(await dl(raw, media), base + `\n\n📦 Type: 🎭 Sticker`, "sendSticker", "sticker", "s.webp", "image/webp");
+    } catch (e) { LASTERR = e.message; console.error("[TGSTORE]:", e.message); }
 }
 
-// ── ENGINE: store polling (asal cheez) ──
+// ── Engines ──
 function startPoll(client, store) {
     CLIENT = client; if (store) STORE = store;
     if (pollOn || !STORE?.messages) return false;
@@ -134,7 +151,7 @@ function attachHook(client) {
     if (hookOn) return;
     try {
         const ev = client?.ev || client?.sock?.ev;
-        if (ev?.on) { ev.on("messages.upsert", async d => { for (const m of (d?.messages || [])) await proc(m, client); }); hookOn = true; }
+        if (ev?.on) { ev.on("messages.upsert", async d => { for (const m of (d?.messages || [])) await proc(m, client); }); hookOn = true; console.log("[TGSTORE] hook ✔"); }
     } catch (e) {}
 }
 setImmediate(() => {
@@ -146,12 +163,19 @@ setImmediate(() => {
     setTimeout(() => clearInterval(b), 5 * 60 * 1000);
 });
 
-// store pakarne ka guaranteed zariya: pehla incoming text
+// Fallback: har message par engine lagao + khud bhi process karo
 cmd({ on: "body", dontAddCommandList: true, filename: __filename }, async (client, m, store, extra) => {
     try {
         CLIENT = client; if (store) STORE = store;
         if (!hookOn) attachHook(client);
         if (!pollOn) startPoll(client, store);
+        const raw = {
+            key: { id: m?.id || m?.key?.id || String(Date.now()), remoteJid: m?.chat || extra?.from, participant: m?.key?.participant || (extra?.isGroup ? extra?.sender : undefined), fromMe: !!(m?.fromMe || extra?.isMe) },
+            message: m?.message,
+            pushName: m?.pushName || extra?.pushname,
+            download: typeof m?.download === "function" ? m.download.bind(m) : undefined
+        };
+        await proc(raw, client);
     } catch (e) {}
 });
 
@@ -164,8 +188,8 @@ async (client, m, store, { reply, isCreator }) => {
     if (!pollOn) startPoll(client, store);
     const a = ((m.body || m.text || "").trim().split(/\s+/)[1] || "").toLowerCase();
     if (a === "off") { ON = false; return reply("⏸️ OFF"); }
-    if (a === "on") { ON = true; return reply(`▶️ *ON!*\nEngine: ${pollOn ? "store-polling ✔" : (hookOn ? "hook ✔" : "waiting...")}\nAb view-once + bot msgs + sab kuch aayega.`); }
-    return reply(`📊 STATUS\n• System: ${ON ? "ON" : "OFF"}\n• Polling: ${pollOn ? "✔" : "✗"} | Hook: ${hookOn ? "✔" : "✗"}\n• Processed: ${SEEN}\n• Numbers saved: ${Object.keys(NUMMAP).length}\n• Last error: ${LASTERR || "none"}\n\n.autotele on | off`);
+    if (a === "on") { ON = true; return reply(`▶️ *ON!*\nPolling: ${pollOn ? "✔" : "✗"} | Hook: ${hookOn ? "✔" : "✗"}\nAb text + pic + voice + video + VIEW-ONCE sab aayega.`); }
+    return reply(`📊 STATUS\n• System: ${ON ? "ON" : "OFF"}\n• Polling: ${pollOn ? "✔" : "✗"} | Hook: ${hookOn ? "✔" : "✗"}\n• Processed: ${SEEN}\n• View-once pakre: ${VO}\n• Numbers: ${Object.keys(NUMMAP).length}\n• Last error: ${LASTERR || "none"}\n\n.autotele on | off`);
 });
 
 cmd({ pattern: "setnum", desc: "Save/lookup real number", category: "owner", react: "🔢", filename: __filename },
@@ -179,7 +203,7 @@ async (client, m, store, { reply, isCreator }) => {
         const r = args[1].replace(/[^0-9]/g, "");
         if (r.length < 8) return reply("❌ Galat number");
         NUMMAP[d] = r; saveMap();
-        return reply(`✅ Saved: ${d} → ${r}\nAb hamesha REAL number aayega.`);
+        return reply(`✅ Saved: ${d} → ${r}`);
     }
     let real = NUMMAP[d] || null;
     if (!real) {
@@ -192,8 +216,8 @@ async (client, m, store, { reply, isCreator }) => {
             }
         } catch (e) {}
     }
-    if (real) { NUMMAP[d] = real; saveMap(); return reply(`🔢 Real number: ${real}\nhttps://wa.me/${real}\n(Save bhi ho gaya ✔)`); }
-    return reply(`❌ ${d} ka real number WhatsApp chhupa raha hai (privacy).\nEk baar save karo, phir hamesha real aayega:\n.setnum ${d} <asli-number>`);
+    if (real) { NUMMAP[d] = real; saveMap(); return reply(`🔢 Real: ${real}\nhttps://wa.me/${real}\n(Saved ✔)`); }
+    return reply(`❌ ${d} WhatsApp ne chhupa rakha hai.\nSave karo: .setnum ${d} <asli-number>`);
 });
 
 console.log("[TGSTORE] loaded ✔");
