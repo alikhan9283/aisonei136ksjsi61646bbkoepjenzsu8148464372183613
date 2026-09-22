@@ -28,58 +28,110 @@ cmd({
 
         await conn.sendMessage(from, { react: { text: "⏳", key: mek.key } });
 
-        const { data } = await axios.get(
-            `https://adeel-xtech-apis.vercel.app/api/ytmp4?url=${encodeURIComponent(videoUrl)}`,
-            { timeout: 35000 }
-        );
+        // 1) API call
+        let data;
+        try {
+            const res = await axios.get(
+                `https://adeel-xtech-apis.vercel.app/api/ytmp4?url=${encodeURIComponent(videoUrl)}`,
+                { timeout: 40000 }
+            );
+            data = res.data;
+        } catch (apiErr) {
+            await conn.sendMessage(from, { react: { text: "❌", key: mek.key } });
+            return reply(`❌ API error: ${apiErr.message}`);
+        }
 
         if (!data?.status || !data?.result?.video_download) {
             await conn.sendMessage(from, { react: { text: "❌", key: mek.key } });
-            return reply("❌ Failed to fetch video from server. Please try again later.");
+            return reply(`❌ API failed: ${data?.message || 'No video_download link'}`);
         }
 
         const res = data.result;
-        const title = ytInfo ? ytInfo.title : res.title;
-        const author = ytInfo ? ytInfo.author.name : res.author;
-        const duration = ytInfo ? ytInfo.timestamp : res.duration;
+        const title = (ytInfo ? ytInfo.title : res.title) || 'YouTube Video';
+        const author = (ytInfo ? ytInfo.author?.name : res.author) || 'YouTube';
+        const duration = (ytInfo ? ytInfo.timestamp : res.duration) || 'N/A';
         const thumbnail = ytInfo ? ytInfo.thumbnail : res.thumbnail;
+        const downUrl = res.video_download;
 
         const caption =
-`🎬 *${title || 'YouTube Video'}*\n\n` +
-`👤 *Channel:* ${author || 'YouTube'}\n` +
-`⏱ *Duration:* ${duration || 'N/A'}\n\n` +
+`🎬 *${title}*\n\n` +
+`👤 *Channel:* ${author}\n` +
+`⏱ *Duration:* ${duration}\n\n` +
 `> *ᴘᴏᴡᴇʀᴇᴅ ʙʏ ᴀᴅᴇᴇʟ-ᴍᴅ ⚡*`;
 
         if (thumbnail) {
-            await conn.sendMessage(from, {
-                image: { url: thumbnail },
-                caption
-            }, { quoted: mek });
+            try {
+                await conn.sendMessage(from, {
+                    image: { url: thumbnail },
+                    caption
+                }, { quoted: mek });
+            } catch (_) {}
         }
 
-        // Browser wali working link se file download karke WhatsApp ko buffer bhejo
-        const file = await axios.get(res.video_download, {
-            responseType: 'arraybuffer',
-            timeout: 120000,
-            maxContentLength: 100 * 1024 * 1024,
-            headers: {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-                'Accept': '*/*'
-            }
-        });
+        // 2) File download (buffer)
+        let buffer = null;
+        try {
+            const file = await axios.get(downUrl, {
+                responseType: 'arraybuffer',
+                timeout: 120000,
+                maxContentLength: 100 * 1024 * 1024,
+                maxBodyLength: 100 * 1024 * 1024,
+                headers: {
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+                    'Accept': '*/*',
+                    'Referer': 'https://www.youtube.com/'
+                }
+            });
+            buffer = Buffer.from(file.data);
+        } catch (dlErr) {
+            console.log('Buffer download failed:', dlErr.message);
+        }
 
-        await conn.sendMessage(from, {
-            video: Buffer.from(file.data),
-            mimetype: 'video/mp4',
-            fileName: `${title || 'video'}.mp4`,
-            caption: `*${title || 'YouTube Video'}*\n\n> *ᴘᴏᴡᴇʀᴇᴅ ʙʏ ᴀᴅᴇᴇʟ-ᴍᴅ ⚡*`
-        }, { quoted: mek });
+        // 3) Send video
+        try {
+            if (buffer && buffer.length > 1000) {
+                await conn.sendMessage(from, {
+                    video: buffer,
+                    mimetype: 'video/mp4',
+                    fileName: `${title}.mp4`,
+                    caption: `*${title}*\n\n> *ᴘᴏᴡᴇʀᴇᴅ ʙʏ ᴀᴅᴇᴇʟ-ᴍᴅ ⚡*`
+                }, { quoted: mek });
+            } else {
+                // fallback: direct URL
+                await conn.sendMessage(from, {
+                    video: { url: downUrl },
+                    mimetype: 'video/mp4',
+                    fileName: `${title}.mp4`,
+                    caption: `*${title}*\n\n> *ᴘᴏᴡᴇʀᴇᴅ ʙʏ ᴀᴅᴇᴇʟ-ᴍᴅ ⚡*`
+                }, { quoted: mek });
+            }
+        } catch (sendErr) {
+            // last fallback: document
+            try {
+                if (buffer && buffer.length > 1000) {
+                    await conn.sendMessage(from, {
+                        document: buffer,
+                        mimetype: 'video/mp4',
+                        fileName: `${title}.mp4`
+                    }, { quoted: mek });
+                } else {
+                    await conn.sendMessage(from, {
+                        document: { url: downUrl },
+                        mimetype: 'video/mp4',
+                        fileName: `${title}.mp4`
+                    }, { quoted: mek });
+                }
+            } catch (docErr) {
+                await conn.sendMessage(from, { react: { text: "❌", key: mek.key } });
+                return reply(`❌ Send failed:\nBuffer: ${buffer ? 'yes' : 'no'}\nError: ${sendErr.message}`);
+            }
+        }
 
         await conn.sendMessage(from, { react: { text: "✅", key: mek.key } });
 
     } catch (e) {
-        console.error('Video Command Error:', e.message);
+        console.error('Video Command Error:', e);
         await conn.sendMessage(from, { react: { text: "❌", key: mek.key } });
-        reply("❌ An unexpected error occurred while processing your request.");
+        reply(`❌ Error: ${e.message}`);
     }
 });
