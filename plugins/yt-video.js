@@ -2,115 +2,64 @@ const { cmd } = require('../command');
 const axios = require('axios');
 const yts = require('yt-search');
 
-async function fetchYtmp4(videoUrl) {
-  let lastErr = null;
-  for (let i = 0; i < 3; i++) {
-    try {
-      const { data, status } = await axios.get(
-        'https://adeel-xtech-apis.vercel.app/api/ytmp4',
-        {
-          params: { url: videoUrl },
-          timeout: 45000,
-          validateStatus: () => true
-        }
-      );
-
-      if (status === 200 && data?.status && data?.result?.video_download) {
-        return data;
-      }
-      lastErr = data?.message || `HTTP ${status}`;
-    } catch (e) {
-      lastErr = e.message;
-    }
-    await new Promise(r => setTimeout(r, 1500));
-  }
-  throw new Error(lastErr || 'API failed');
-}
-
 cmd({
     pattern: "video",
-    alias: ["mp4"],
-    desc: "Download YouTube video via Adeel-Xtech API",
-    category: "download",
+    alias: ["mp4", "ytmp4"],
     react: "🎬",
+    desc: "Download video from YouTube",
+    category: "download",
     filename: __filename
-}, async (conn, mek, m, { from, q, reply }) => {
+}, async (conn, mek, m, { from, quoted, body, isCmd, command, args, q, isGroup, sender, senderNumber, botNumber2, botNumber, pushname, isMe, isOwner, groupMetadata, groupName, participants, groupAdmins, isBotAdmins, isAdmins, reply }) => {
     try {
-        if (!q) return reply("❌ Please provide a video name or YouTube link!");
-
-        let videoUrl = q;
-        let ytInfo = null;
-        const isYT = /^(https?:\/\/)?(www\.)?(youtube\.com|youtu\.be)\//i.test(q);
-
-        if (!isYT) {
-            const searchResults = await yts(q);
-            if (!searchResults?.videos?.length) {
-                return reply("❌ No video results found on YouTube!");
-            }
-            ytInfo = searchResults.videos[0];
-            videoUrl = ytInfo.url;
-        }
+        if (!q) return reply("⚠️ Please provide a video name or YouTube link!");
 
         await conn.sendMessage(from, { react: { text: "⏳", key: mek.key } });
 
-        const data = await fetchYtmp4(videoUrl);
-        const res = data.result;
+        let search = await yts(q);
+        let data = search.videos[0];
 
-        const title = (ytInfo ? ytInfo.title : res.title) || 'YouTube Video';
-        const author = (ytInfo ? ytInfo.author?.name : res.author) || 'YouTube';
-        const duration = (ytInfo ? ytInfo.timestamp : res.duration) || 'N/A';
-        const thumbnail = ytInfo ? ytInfo.thumbnail : res.thumbnail;
+        if (!data) return reply("❌ No video found!");
 
-        const caption =
-`🎬 *${title}*\n\n` +
-`👤 *Channel:* ${author}\n` +
-`⏱ *Duration:* ${duration}\n\n` +
-`> *ᴘᴏᴡᴇʀᴇᴅ ʙʏ ᴀᴅᴇᴇʟ-ᴍᴅ ⚡*`;
+        let url = data.url;
 
-        if (thumbnail) {
-            try {
-                await conn.sendMessage(from, { image: { url: thumbnail }, caption }, { quoted: mek });
-            } catch (_) {}
+        let desc = `🎬 *ADEEL-MD VIDEO DOWNLOADER* 🎬\n\n` +
+                   `🎵 *Title:* ${data.title}\n` +
+                   `⏱️ *Duration:* ${data.timestamp}\n` +
+                   `👁️ *Views:* ${data.views}\n` +
+                   `👤 *Author:* ${data.author.name}\n` +
+                   `🔗 *URL:* ${data.url}\n\n` +
+                   `> *ᴘᴏᴡᴇʀᴇᴅ ʙʏ ᴀᴅᴇᴇ🇱-ᴍᴅ* 👑`;
+
+        await conn.sendMessage(from, { image: { url: data.thumbnail }, caption: desc }, { quoted: mek });
+
+        const apiRes = await axios.get(`https://adeel-xtech-apis.vercel.app/api/ytmp4?url=${encodeURIComponent(url)}`, { timeout: 30000 });
+
+        if (!apiRes.data?.status || !apiRes.data?.result?.video_download) {
+            await conn.sendMessage(from, { react: { text: "❌", key: mek.key } });
+            return reply("❌ Could not fetch video download link. Try again later.");
         }
 
-        // buffer download
-        let buffer = null;
-        try {
-            const file = await axios.get(res.video_download, {
-                responseType: 'arraybuffer',
-                timeout: 120000,
-                maxContentLength: 100 * 1024 * 1024,
-                headers: {
-                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-                    'Referer': 'https://www.youtube.com/'
-                }
-            });
-            buffer = Buffer.from(file.data);
-        } catch (e) {
-            console.log('Buffer fail:', e.message);
-        }
+        const videoUrl = apiRes.data.result.video_download;
 
-        if (buffer && buffer.length > 1000) {
-            await conn.sendMessage(from, {
-                video: buffer,
-                mimetype: 'video/mp4',
-                fileName: `${title}.mp4`,
-                caption: `*${title}*\n\n> *ᴘᴏᴡᴇʀᴇᴅ ʙʏ ᴀᴅᴇᴇʟ-ᴍᴅ ⚡*`
-            }, { quoted: mek });
-        } else {
-            await conn.sendMessage(from, {
-                video: { url: res.video_download },
-                mimetype: 'video/mp4',
-                fileName: `${title}.mp4`,
-                caption: `*${title}*\n\n> *ᴘᴏᴡᴇʀᴇᴅ ʙʏ ᴀᴅᴇᴇʟ-ᴍᴅ ⚡*`
-            }, { quoted: mek });
-        }
+        const videoRes = await axios.get(videoUrl, {
+            responseType: 'arraybuffer',
+            timeout: 90000,
+            headers: { 
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36' 
+            }
+        });
+
+        await conn.sendMessage(from, {
+            video: Buffer.from(videoRes.data),
+            mimetype: "video/mp4",
+            caption: `*${data.title}*\n\n> *ᴘᴏᴡᴇʀᴇᴅ ʙʏ ᴀᴅᴇᴇ🇱-ᴍᴅ* 👑`
+        }, { quoted: mek });
 
         await conn.sendMessage(from, { react: { text: "✅", key: mek.key } });
 
     } catch (e) {
-        console.error('Video Command Error:', e.message);
-        await conn.sendMessage(from, { react: { text: "❌", key: mek.key } });
-        reply(`❌ ${e.message}`);
+        console.log(e);
+        reply(`❌ Error: ${e.message}`);
+        try { await conn.sendMessage(from, { react: { text: "❌", key: mek.key } }); } catch {}
     }
 });
