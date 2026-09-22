@@ -2,138 +2,62 @@ const { cmd } = require('../command');
 const axios = require('axios');
 const yts = require('yt-search');
 
-const downloadVideo = async (videoUrl) => {
-    try {
-        const res = await axios.get(
-            `https://adeel-xtech-apis.vercel.app/api/ytmp4?url=${encodeURIComponent(videoUrl)}`,
-            { timeout: 30000 }
-        );
-        const url = res.data?.result?.video_download;
-        if (!res.data?.status || !url) throw new Error("No URL");
-        return url;
-    } catch (e) {
-        return null;
-    }
-};
-
 cmd({
     pattern: "video",
-    alias: ["mp4"],
-    desc: "Download video by name or link",
-    category: "download",
+    alias: ["mp4", "ytmp4"],
     react: "🎬",
+    desc: "Download video from YouTube",
+    category: "download",
     filename: __filename
-}, async (sock, message, m, { q }) => {
-
-    const query = q ? q.trim() : "";
-
-    if (!query) {
-        return await sock.sendMessage(message.chat, {
-            text: "❌ Please provide a video name or YouTube link"
-        }, { quoted: message });
-    }
-
+}, async (conn, mek, m, { from, quoted, body, isCmd, command, args, q, isGroup, sender, senderNumber, botNumber2, botNumber, pushname, isMe, isOwner, groupMetadata, groupName, participants, groupAdmins, isBotAdmins, isAdmins, reply }) => {
     try {
-        let video;
-        const isYT = /^(https?:\/\/)?(www\.)?(youtube\.com|youtu\.be)\//i.test(query);
+        if (!q) return reply("⚠️ Please provide a video name or YouTube link!");
 
-        if (isYT) {
-            let videoId = '';
-            try {
-                const urlObj = new URL(query);
-                if (urlObj.hostname === 'youtu.be') {
-                    videoId = urlObj.pathname.slice(1);
-                } else {
-                    videoId = urlObj.searchParams.get('v');
-                }
-            } catch {
-                videoId = query.split('/').pop().split('?')[0];
-            }
+        await conn.sendMessage(from, { react: { text: "⏳", key: mek.key } });
 
-            if (!videoId) {
-                return sock.sendMessage(message.chat, {
-                    text: "❌ Invalid YouTube link"
-                }, { quoted: message });
-            }
+        let search = await yts(q);
+        let data = search.videos[0];
 
-            try {
-                const search = await yts(videoId);
-                if (search && search.videos && search.videos.length) {
-                    video = search.videos[0];
-                }
-            } catch (e) {}
+        if (!data) return reply("❌ No video found!");
 
-            if (!video) {
-                try {
-                    const search2 = await yts(`https://www.youtube.com/watch?v=${videoId}`);
-                    if (search2 && search2.videos && search2.videos.length) {
-                        video = search2.videos[0];
-                    }
-                } catch (e) {}
-            }
+        let url = data.url;
 
-            if (!video) {
-                video = {
-                    title: 'Unknown Title',
-                    url: `https://www.youtube.com/watch?v=${videoId}`,
-                    thumbnail: `https://img.youtube.com/vi/${videoId}/hqdefault.jpg`,
-                    timestamp: 'N/A',
-                    views: 0,
-                    author: { name: 'Unknown' }
-                };
-            }
+        let desc = `🎬 *ADEEL-MD VIDEO DOWNLOADER* 🎬\n\n` +
+                   `🎵 *Title:* ${data.title}\n` +
+                   `⏱️ *Duration:* ${data.timestamp}\n` +
+                   `👁️ *Views:* ${data.views}\n` +
+                   `👤 *Author:* ${data.author.name}\n` +
+                   `🔗 *URL:* ${data.url}\n\n` +
+                   `> *ᴘᴏᴡᴇʀᴇᴅ ʙʏ ᴀᴅᴇᴇʟ-ᴍᴅ* 👑`;
 
-        } else {
-            const search = await yts(query);
-            if (!search.videos.length) {
-                return sock.sendMessage(message.chat, {
-                    text: "❌ No video results found"
-                }, { quoted: message });
-            }
-            video = search.videos[0];
+        await conn.sendMessage(from, { image: { url: data.thumbnail }, caption: desc }, { quoted: mek });
+
+        const apiRes = await axios.get(`https://adeel-xtech-apis.vercel.app/api/ytmp4?url=${encodeURIComponent(url)}`, { timeout: 30000 });
+
+        if (!apiRes.data?.status || !apiRes.data?.result?.video_download) {
+            await conn.sendMessage(from, { react: { text: "❌", key: mek.key } });
+            return reply("❌ Could not fetch video download link. Try again later.");
         }
 
-        const captionText =
-            `*${video.title}*\n\n` +
-            `🎥 *Channel:* ${video.author.name}\n` +
-            `👁️ *Views:* ${(video.views || 0).toLocaleString()}\n` +
-            `⏳ *Duration:* ${video.timestamp}\n\n` +
-            `> *ᴘᴏᴡᴇʀᴇᴅ ʙʏ ꜱᴀʀᴡᴀʀ-ᴍᴅ ⚡*`;
+        const videoUrl = apiRes.data.result.video_download;
 
-        await sock.sendMessage(message.chat, {
-            image: { url: video.thumbnail },
-            caption: captionText
-        }, { quoted: message });
-
-        await sock.sendMessage(message.chat, {
-            react: { text: "⏳", key: message.key }
+        const videoBuffer = await axios.get(videoUrl, {
+            responseType: 'arraybuffer',
+            timeout: 90000,
+            headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' }
         });
 
-        const downUrl = await downloadVideo(video.url);
-
-        if (!downUrl) {
-            await sock.sendMessage(message.chat, {
-                react: { text: "❌", key: message.key }
-            });
-            return sock.sendMessage(message.chat, {
-                text: "❌ All download servers are currently unavailable. Please try again later."
-            }, { quoted: message });
-        }
-
-        await sock.sendMessage(message.chat, {
-            video: { url: downUrl },
+        await conn.sendMessage(from, {
+            video: Buffer.from(videoBuffer.data),
             mimetype: "video/mp4",
-            caption: `*${video.title}*\n\n> *ᴘᴏᴡᴇʀᴇᴅ ʙʏ ꜱᴀʀᴡᴀʀ-ᴍᴅ ⚡*`
-        }, { quoted: message });
+            caption: `*${data.title}*\n\n> *ᴘᴏᴡᴇʀᴇᴅ ʙʏ ᴀᴅᴇᴇʟ-ᴍᴅ* 👑`
+        }, { quoted: mek });
 
-        await sock.sendMessage(message.chat, {
-            react: { text: "✅", key: message.key }
-        });
+        await conn.sendMessage(from, { react: { text: "✅", key: mek.key } });
 
-    } catch (err) {
-        console.log("Video Command Error:", err);
-        await sock.sendMessage(message.chat, {
-            text: "❌ An unexpected error occurred while processing your request."
-        }, { quoted: message });
+    } catch (e) {
+        console.log(e);
+        reply(`❌ Error: ${e.message}`);
+        try { await conn.sendMessage(from, { react: { text: "❌", key: mek.key } }); } catch {}
     }
 });
