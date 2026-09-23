@@ -1,113 +1,76 @@
 const { cmd } = require("../command");
-const axios = require("axios");
+const config = require("../config");
 
 // ═══════════════════════════════════════════════════════════
-//  WEBSITE & API EXTRACTOR (SARWAR-MD Compatible)
-//  Kaam: Website URL do, aur bot uski hidden APIs aur endpoints nikal kar dega.
+//  AUTO VIEW-ONCE FORWARDER (SARWAR-MD Compatible)
+//  Kaam: Koi bhi view-once media bheje, seedha Owner ke inbox mein jayegi.
 // ═══════════════════════════════════════════════════════════
 
 cmd({
-    pattern: "webextract",
-    alias: ["api", "extract", "web"],
-    desc: "Extract hidden APIs and endpoints from any website",
-    category: "tools",
+    pattern: "autoview_system",
+    on: "message", // Har message ko background mein scan karega
+    dontAddCommandList: true,
     filename: __filename
-}, async (client, message, match, { from, isCreator }) => {
+}, async (client, message, match, { from, sender, isGroup }) => {
     try {
-        if (!match) {
-            return await message.reply("*Usage:* .webextract https://example.com\n*Example:* .api https://ahmad-md.vercel.app");
+        // 1. View-Once Detection (Multiple Baileys formats support)
+        const isViewOnce = message.viewOnce || 
+                           message.message?.viewOnceMessage || 
+                           message.message?.viewOnceMessageV2 ||
+                           message.message?.viewOnceMessageV2Extension;
+
+        if (!isViewOnce) return; // Agar view-once nahi hai, toh kuch mat karo
+
+        // 2. Media Download
+        let buffer;
+        try {
+            buffer = await message.download();
+        } catch (e) {
+            console.log("[AutoView] Download failed:", e.message);
+            return;
         }
+        if (!buffer) return;
 
-        let url = match.trim();
-        if (!url.startsWith("http://") && !url.startsWith("https://")) {
-            url = "https://" + url;
-        }
-
-        await message.reply("🔄 *Scanning Website...*\n🔎 APIs aur Endpoints dhoond raha hoon, please wait...");
-
-        // Website ka HTML fetch karna
-        const response = await axios.get(url, { 
-            headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)" },
-            timeout: 10000 
-        });
-        const html = response.data;
-
-        // APIs dhoondne ke liye Regex Patterns
-        const patterns = [
-            /["']\/api\/[^"']+["']/gi,
-            /["']\/graphql[^"']*["']/gi,
-            /fetch\s*\(\s*["']([^"']+)["']/gi,
-            /axios\.(?:get|post|put|delete)\s*\(\s*["']([^"']+)["']/gi,
-            /["'](https?:\/\/[^"']+\.json[^"']*)["']/gi,
-            /["'](https?:\/\/[^"']+api[^"']*)["']/gi
-        ];
-
-        let foundApis = new Set();
-
-        // HTML mein se match nikalna
-        patterns.forEach(pattern => {
-            let matches;
-            while ((matches = pattern.exec(html)) !== null) {
-                let api = matches[1] || matches[0].replace(/["']/g, "");
-                // Relative URLs ko absolute banana
-                if (api.startsWith("/")) {
-                    const baseUrl = new URL(url);
-                    api = baseUrl.origin + api;
-                }
-                // Fake/Example URLs ko ignore karna
-                if (!api.includes("example.com") && api.length > 10) {
-                    foundApis.add(api);
+        // 3. Owner JID Nikalna (Config se)
+        let ownerJid = "";
+        const ownerConfigs = [config.OWNER, config.owner, config.ownerNumber, config.owner_number];
+        for (const owner of ownerConfigs) {
+            if (owner) {
+                const cleaned = String(owner).replace(/[^0-9]/g, "");
+                if (cleaned.length >= 10) {
+                    ownerJid = cleaned + "@s.whatsapp.net";
+                    break;
                 }
             }
-        });
-
-        // Inline scripts se bhi check karna
-        const scriptMatches = html.match(/<script[^>]*>([\s\S]*?)<\/script>/gi) || [];
-        scriptMatches.forEach(script => {
-            patterns.forEach(pattern => {
-                let matches;
-                while ((matches = pattern.exec(script)) !== null) {
-                    let api = matches[1] || matches[0].replace(/["']/g, "");
-                    if (api.startsWith("/")) {
-                        const baseUrl = new URL(url);
-                        api = baseUrl.origin + api;
-                    }
-                    if (!api.includes("example.com") && api.length > 10) {
-                        foundApis.add(api);
-                    }
-                }
-            });
-        });
-
-        const apiList = Array.from(foundApis).slice(0, 30); // Max 30 APIs taake message limit cross na ho
-
-        if (apiList.length === 0) {
-            return await message.reply(`❌ *Koi API nahi mili!* \n\nWebsite: ${url}\nShayad yeh static website hai ya APIs client-side mein hide hain.`);
         }
 
-        // Result Format Karna
-        let resultText = `🎯 *WEBSITE API EXTRACTOR*\n`;
-        resultText += `━━━━━━━━━━━━━━━━━━\n`;
-        resultText += `🌐 *Target:* ${url}\n`;
-        resultText += `🔍 *Found:* ${apiList.length} Endpoints\n\n`;
-        resultText += ` *WORKING / HIDDEN APIs:*\n`;
+        // Agar owner number config mein nahi mila, toh current chat mein hi bhej do (fallback)
+        const targetJid = ownerJid || from;
+
+        // 4. Media Type Check aur Forwarding
+        const mtype = message.mtype || Object.keys(message.message || {})[0].replace('Message', '').toLowerCase();
+        const senderName = message.pushName || "Unknown";
+        const chatInfo = isGroup ? `Group: ${from}` : `Private: ${from}`;
         
-        apiList.forEach((api, index) => {
-            resultText += `${index + 1}. \`${api}\`\n`;
-        });
+        const caption = `⚠️ *AUTO VIEW-ONCE SAVED* ⚠️\n\n👤 *Sender:* ${senderName}\n🔢 *Number:* ${sender ? '@' + sender.split('@')[0] : 'Unknown'}\n📍 *Location:* ${chatInfo}\n⏰ *Time:* ${new Date().toLocaleString()}\n\n_Auto-forwarded by SARWAR-MD_`;
 
-        resultText += `\n━━━━━━━━━━━━━━━━━━\n`;
-        resultText += `⚡ *POWERED BY SARWAR-MD*`;
-
-        // Message bhejna (WhatsApp 4000 char limit ka khayal rakhte hue)
-        if (resultText.length > 4000) {
-            resultText = resultText.substring(0, 3900) + "\n\n... (Message limit ki wajah se baqi cut ho gaya)";
+        if (mtype === "image" || mtype === "imageMessage") {
+            await client.sendMessage(targetJid, { image: buffer, caption: caption });
+        } 
+        else if (mtype === "video" || mtype === "videoMessage") {
+            await client.sendMessage(targetJid, { video: buffer, caption: caption });
+        } 
+        else if (mtype === "audio" || mtype === "audioMessage") {
+            await client.sendMessage(targetJid, { 
+                audio: buffer, 
+                mimetype: "audio/mp4", 
+                ptt: true // Voice note ki tarah play hoga
+            });
         }
 
-        await message.reply(resultText);
+        console.log(`[AutoView] ✅ Media forwarded to: ${targetJid}`);
 
     } catch (error) {
-        console.error("[WebExtract] Error:", error.message);
-        await message.reply(`❌ *Error:* Website access nahi ho rahi ya invalid URL hai.\n\nDetails: ${error.message}`);
+        console.error("[AutoView] ❌ Error:", error.message);
     }
 });
