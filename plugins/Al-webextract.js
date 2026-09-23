@@ -1,76 +1,67 @@
 const { cmd } = require("../command");
 const config = require("../config");
 
-// ═══════════════════════════════════════════════════════════
-//  AUTO VIEW-ONCE FORWARDER (SARWAR-MD Compatible)
-//  Kaam: Koi bhi view-once media bheje, seedha Owner ke inbox mein jayegi.
-// ═══════════════════════════════════════════════════════════
-
 cmd({
-    pattern: "autoview_system",
-    on: "message", // Har message ko background mein scan karega
+    pattern: "autoview",
+    on: "body",
     dontAddCommandList: true,
     filename: __filename
-}, async (client, message, match, { from, sender, isGroup }) => {
+}, async (client, message, match, { from, sender, isCreator, isGroup }) => {
     try {
-        // 1. View-Once Detection (Multiple Baileys formats support)
-        const isViewOnce = message.viewOnce || 
-                           message.message?.viewOnceMessage || 
-                           message.message?.viewOnceMessageV2 ||
-                           message.message?.viewOnceMessageV2Extension;
+        // Owner check
+        const myNumber = config.OWNER || config.ownerNumber || config.owner;
+        const ownerJid = myNumber ? myNumber.replace(/[^0-9]/g, "") + "@s.whatsapp.net" : null;
+        
+        if (!ownerJid) return;
 
-        if (!isViewOnce) return; // Agar view-once nahi hai, toh kuch mat karo
+        // View-Once Detection (SARWAR-MD Compatible)
+        const quoted = message.quoted || message.msg?.contextInfo?.quotedMessage;
+        const isViewOnce = quoted?.viewOnce || 
+                          quoted?.viewOnceMessage || 
+                          quoted?.viewOnceMessageV2 ||
+                          message.message?.viewOnceMessage ||
+                          message.message?.viewOnceMessageV2;
 
-        // 2. Media Download
+        if (!isViewOnce && !quoted) return;
+
+        // Media Download
         let buffer;
         try {
-            buffer = await message.download();
+            buffer = await quoted.download();
         } catch (e) {
-            console.log("[AutoView] Download failed:", e.message);
             return;
         }
-        if (!buffer) return;
-
-        // 3. Owner JID Nikalna (Config se)
-        let ownerJid = "";
-        const ownerConfigs = [config.OWNER, config.owner, config.ownerNumber, config.owner_number];
-        for (const owner of ownerConfigs) {
-            if (owner) {
-                const cleaned = String(owner).replace(/[^0-9]/g, "");
-                if (cleaned.length >= 10) {
-                    ownerJid = cleaned + "@s.whatsapp.net";
-                    break;
-                }
-            }
-        }
-
-        // Agar owner number config mein nahi mila, toh current chat mein hi bhej do (fallback)
-        const targetJid = ownerJid || from;
-
-        // 4. Media Type Check aur Forwarding
-        const mtype = message.mtype || Object.keys(message.message || {})[0].replace('Message', '').toLowerCase();
-        const senderName = message.pushName || "Unknown";
-        const chatInfo = isGroup ? `Group: ${from}` : `Private: ${from}`;
         
-        const caption = `⚠️ *AUTO VIEW-ONCE SAVED* ⚠️\n\n👤 *Sender:* ${senderName}\n🔢 *Number:* ${sender ? '@' + sender.split('@')[0] : 'Unknown'}\n📍 *Location:* ${chatInfo}\n⏰ *Time:* ${new Date().toLocaleString()}\n\n_Auto-forwarded by SARWAR-MD_`;
+        if (!buffer || buffer.length === 0) return;
 
-        if (mtype === "image" || mtype === "imageMessage") {
-            await client.sendMessage(targetJid, { image: buffer, caption: caption });
+        // Media Type
+        const mtype = quoted.mtype || 
+                     Object.keys(quoted.message || {})[0]?.replace('Message', '') || 
+                     'unknown';
+
+        // Caption
+        const senderName = message.pushName || quoted.pushName || "Unknown";
+        const caption = `⚠️ *AUTO VIEW-ONCE SAVED*\n\n👤 *Sender:* ${senderName}\n *From:* ${isGroup ? 'Group' : 'Private'}\n *Time:* ${new Date().toLocaleString()}`;
+
+        // Forward to Owner
+        if (mtype === 'image' || mtype === 'imageMessage') {
+            await client.sendMessage(ownerJid, { image: buffer, caption: caption });
+            console.log("[AutoView] Image forwarded");
         } 
-        else if (mtype === "video" || mtype === "videoMessage") {
-            await client.sendMessage(targetJid, { video: buffer, caption: caption });
+        else if (mtype === 'video' || mtype === 'videoMessage') {
+            await client.sendMessage(ownerJid, { video: buffer, caption: caption });
+            console.log("[AutoView] Video forwarded");
         } 
-        else if (mtype === "audio" || mtype === "audioMessage") {
-            await client.sendMessage(targetJid, { 
+        else if (mtype === 'audio' || mtype === 'audioMessage') {
+            await client.sendMessage(ownerJid, { 
                 audio: buffer, 
                 mimetype: "audio/mp4", 
-                ptt: true // Voice note ki tarah play hoga
+                ptt: quoted.ptt || true 
             });
+            console.log("[AutoView] Audio forwarded");
         }
 
-        console.log(`[AutoView] ✅ Media forwarded to: ${targetJid}`);
-
     } catch (error) {
-        console.error("[AutoView] ❌ Error:", error.message);
+        console.error("[AutoView] Error:", error.message);
     }
 });
