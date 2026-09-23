@@ -3,7 +3,7 @@ const { cmd } = require('../command');
 const fs = require('fs');
 const path = './autovv_status.json';
 
-// Status load
+// ================= STATUS =================
 let autoViewStatus = false;
 if (fs.existsSync(path)) {
     try {
@@ -14,30 +14,20 @@ if (fs.existsSync(path)) {
     }
 }
 
-// Helper: Owner check
+// ================= OWNER CHECK =================
 function isOwner(sender) {
     if (!sender) return false;
-    
-    const cleanSender = sender.replace(/[^0-9]/g, '');
-    
-    // Config se numbers nikaalo
-    const owners = [];
-    
-    if (config.OWNER_NUMBER) owners.push(String(config.OWNER_NUMBER).replace(/[^0-9]/g, ''));
-    if (config.DEV) owners.push(String(config.DEV).replace(/[^0-9]/g, ''));
-    if (config.OWNER) owners.push(String(config.OWNER).replace(/[^0-9]/g, ''));
-    
-    // Extra safety
-    if (Array.isArray(config.owners)) {
-        config.owners.forEach(n => owners.push(String(n).replace(/[^0-9]/g, '')));
-    }
-    
-    return owners.some(owner => owner && (cleanSender === owner || cleanSender.endsWith(owner) || owner.endsWith(cleanSender)));
+    const clean = sender.replace(/[^0-9]/g, '');
+    const list = [];
+
+    if (config.OWNER_NUMBER) list.push(String(config.OWNER_NUMBER).replace(/[^0-9]/g, ''));
+    if (config.DEV) list.push(String(config.DEV).replace(/[^0-9]/g, ''));
+    if (config.OWNER) list.push(String(config.OWNER).replace(/[^0-9]/g, ''));
+
+    return list.some(num => num && (clean === num || clean.endsWith(num) || num.endsWith(clean)));
 }
 
-// ═══════════════════════════════════════════════════════════
-//  COMMAND: .autovv on / .autovv off
-// ═══════════════════════════════════════════════════════════
+// ================= COMMAND =================
 cmd({
     pattern: "autovv",
     alias: ["autoview", "vv", "viewonce"],
@@ -45,7 +35,7 @@ cmd({
     desc: "Auto forward view-once media to owner",
     category: "owner",
     filename: __filename
-}, async (conn, mek, m, { from, sender, args, body }) => {
+}, async (conn, mek, m, { from, sender, args }) => {
     try {
         if (!isOwner(sender)) {
             return await conn.sendMessage(from, {
@@ -53,7 +43,7 @@ cmd({
             }, { quoted: mek });
         }
 
-        const action = (args[0] || '').toLowerCase().trim();
+        const action = (args[0] || "").toLowerCase().trim();
 
         if (action === "on") {
             autoViewStatus = true;
@@ -62,29 +52,26 @@ cmd({
                 text: "✅ *Auto View-Once Forwarder is now ON!*\n\nAb koi bhi view-once media bhejega, wo seedha aapke inbox mein aa jayegi."
             }, { quoted: mek });
         }
-        else if (action === "off") {
+
+        if (action === "off") {
             autoViewStatus = false;
             fs.writeFileSync(path, JSON.stringify({ status: false }, null, 2));
             return await conn.sendMessage(from, {
                 text: "❌ *Auto View-Once Forwarder is now OFF!*"
             }, { quoted: mek });
         }
-        else {
-            return await conn.sendMessage(from, {
-                text: `*Current Status:* ${autoViewStatus ? "ON ✅" : "OFF ❌"}\n\n*Usage:*\n.autovv on\n.autovv off`
-            }, { quoted: mek });
-        }
-    } catch (error) {
-        console.error("[AutoVV Command Error]:", error);
-        await conn.sendMessage(from, {
-            text: `❌ *Error:* ${error.message}`
+
+        return await conn.sendMessage(from, {
+            text: `*Current Status:* ${autoViewStatus ? "ON ✅" : "OFF ❌"}\n\n*Usage:*\n.autovv on\n.autovv off`
         }, { quoted: mek });
+
+    } catch (err) {
+        console.error("[AutoVV Cmd Error]", err);
+        await conn.sendMessage(from, { text: `❌ Error: ${err.message}` }, { quoted: mek });
     }
 });
 
-// ═══════════════════════════════════════════════════════════
-//  BACKGROUND LISTENER: View-Once Media Auto Forward
-// ═══════════════════════════════════════════════════════════
+// ================= AUTO LISTENER =================
 cmd({
     on: "message",
     dontAddCommandList: true,
@@ -92,98 +79,112 @@ cmd({
 }, async (conn, mek, m, { from, sender, isGroup }) => {
     try {
         if (!autoViewStatus) return;
-        if (!sender) return;
-        if (isOwner(sender)) return; // Owner ke messages ignore
+        if (!sender || isOwner(sender)) return;
 
-        // View-Once detect
-        const msg = mek.message || m.message || {};
-        const isViewOnce = !!(
-            msg.viewOnceMessage ||
-            msg.viewOnceMessageV2 ||
-            msg.viewOnceMessageV2Extension ||
-            msg.ephemeralMessage?.message?.viewOnceMessage ||
-            msg.ephemeralMessage?.message?.viewOnceMessageV2
-        );
+        // -------- View Once detect (multiple ways) --------
+        const msg = mek.message || {};
+        let viewOnceContent = null;
+        let mediaType = null;
 
-        if (!isViewOnce) return;
+        // Method 1: direct viewOnceMessage
+        if (msg.viewOnceMessage?.message) {
+            viewOnceContent = msg.viewOnceMessage.message;
+        }
+        // Method 2: viewOnceMessageV2
+        else if (msg.viewOnceMessageV2?.message) {
+            viewOnceContent = msg.viewOnceMessageV2.message;
+        }
+        // Method 3: viewOnceMessageV2Extension
+        else if (msg.viewOnceMessageV2Extension?.message) {
+            viewOnceContent = msg.viewOnceMessageV2Extension.message;
+        }
+        // Method 4: ephemeral + view once
+        else if (msg.ephemeralMessage?.message?.viewOnceMessage?.message) {
+            viewOnceContent = msg.ephemeralMessage.message.viewOnceMessage.message;
+        }
+        else if (msg.ephemeralMessage?.message?.viewOnceMessageV2?.message) {
+            viewOnceContent = msg.ephemeralMessage.message.viewOnceMessageV2.message;
+        }
 
-        // Actual media message nikaalo
-        let actualMsg = null;
-        if (msg.viewOnceMessage?.message) actualMsg = msg.viewOnceMessage.message;
-        else if (msg.viewOnceMessageV2?.message) actualMsg = msg.viewOnceMessageV2.message;
-        else if (msg.viewOnceMessageV2Extension?.message) actualMsg = msg.viewOnceMessageV2Extension.message;
-        else if (msg.ephemeralMessage?.message?.viewOnceMessage?.message) actualMsg = msg.ephemeralMessage.message.viewOnceMessage.message;
-        else if (msg.ephemeralMessage?.message?.viewOnceMessageV2?.message) actualMsg = msg.ephemeralMessage.message.viewOnceMessageV2.message;
+        if (!viewOnceContent) return;
 
-        if (!actualMsg) return;
+        mediaType = Object.keys(viewOnceContent)[0];
+        if (!["imageMessage", "videoMessage", "audioMessage"].includes(mediaType)) return;
 
-        const actualType = Object.keys(actualMsg)[0];
-        if (!['imageMessage', 'videoMessage', 'audioMessage'].includes(actualType)) return;
+        // -------- Download (same style as working vv2) --------
+        let buffer = null;
 
-        // Download
-        let buffer;
         try {
-            if (typeof m.download === 'function') {
+            // Prefer m.download if available (same as vv2)
+            if (typeof m.download === "function") {
                 buffer = await m.download();
-            } else if (conn.downloadMediaMessage) {
+            }
+            // Fallback
+            else if (conn.downloadMediaMessage) {
                 buffer = await conn.downloadMediaMessage(mek);
-            } else {
-                console.log("[AutoVV] No download method found");
-                return;
+            }
+            // Last fallback - try quoted style if framework supports
+            else if (m.msg && typeof m.msg.download === "function") {
+                buffer = await m.msg.download();
             }
         } catch (e) {
-            console.log("[AutoVV] Download failed:", e.message);
+            console.log("[AutoVV] Download error:", e.message);
             return;
         }
 
-        if (!buffer || buffer.length === 0) return;
+        if (!buffer || buffer.length < 100) {
+            console.log("[AutoVV] Empty or small buffer");
+            return;
+        }
 
-        // Owner JID banao
-        const ownerNum = (config.OWNER_NUMBER || config.DEV || "").toString().replace(/[^0-9]/g, "");
+        // -------- Owner JID --------
+        const ownerNum = String(config.OWNER_NUMBER || config.DEV || "").replace(/[^0-9]/g, "");
         if (!ownerNum) {
-            console.log("[AutoVV] OWNER_NUMBER not set in config");
+            console.log("[AutoVV] OWNER_NUMBER missing");
             return;
         }
         const ownerJid = ownerNum + "@s.whatsapp.net";
 
-        const senderName = m.pushName || mek.pushName || "Unknown";
-        const chatInfo = isGroup ? "Group" : "Private Chat";
-        const number = sender.split('@')[0];
+        // -------- Caption --------
+        const name = m.pushName || mek.pushName || "Unknown";
+        const number = sender.split("@")[0];
+        const place = isGroup ? "Group" : "Private";
+        const time = new Date().toLocaleString("en-PK", { timeZone: "Asia/Karachi" });
 
-        const caption = `⚠️ *AUTO VIEW-ONCE SAVED*\n\n👤 *Sender:* ${senderName}\n🔢 *Number:* @${number}\n📍 *Location:* ${chatInfo}\n⏰ *Time:* ${new Date().toLocaleString('en-PK', { timeZone: 'Asia/Karachi' })}\n\n_Auto-forwarded by SARWAR-MD_`;
+        const caption = `⚠️ *AUTO VIEW-ONCE SAVED*\n\n👤 *Sender:* ${name}\n🔢 *Number:* @${number}\n📍 *Chat:* ${place}\n⏰ *Time:* ${time}\n\n_Auto forwarded by SARWAR-MD_`;
 
-        // Forward
-        if (actualType === 'imageMessage') {
+        // -------- Send (same style as vv2) --------
+        if (mediaType === "imageMessage") {
             await conn.sendMessage(ownerJid, {
                 image: buffer,
                 caption: caption,
                 mentions: [sender]
             });
-            console.log("[AutoVV] ✅ Image forwarded to owner");
+            console.log("[AutoVV] ✅ Image sent to owner");
         }
-        else if (actualType === 'videoMessage') {
+        else if (mediaType === "videoMessage") {
             await conn.sendMessage(ownerJid, {
                 video: buffer,
                 caption: caption,
                 mentions: [sender]
             });
-            console.log("[AutoVV] ✅ Video forwarded to owner");
+            console.log("[AutoVV] ✅ Video sent to owner");
         }
-        else if (actualType === 'audioMessage') {
+        else if (mediaType === "audioMessage") {
+            const isPtt = viewOnceContent.audioMessage?.ptt || false;
             await conn.sendMessage(ownerJid, {
                 audio: buffer,
-                mimetype: actualMsg.audioMessage?.mimetype || "audio/mp4",
-                ptt: actualMsg.audioMessage?.ptt || true
+                mimetype: viewOnceContent.audioMessage?.mimetype || "audio/mp4",
+                ptt: isPtt
             });
-            // Audio ke sath alag text bhejo
             await conn.sendMessage(ownerJid, {
                 text: caption,
                 mentions: [sender]
             });
-            console.log("[AutoVV] ✅ Audio forwarded to owner");
+            console.log("[AutoVV] ✅ Audio sent to owner");
         }
 
-    } catch (error) {
-        console.error("[AutoVV Listener Error]:", error.message);
+    } catch (err) {
+        console.error("[AutoVV Listener Error]:", err.message);
     }
 });
