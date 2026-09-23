@@ -3,7 +3,6 @@ const { cmd } = require('../command');
 const fs = require('fs');
 const path = './autovv_status.json';
 
-// Status load karna
 let autoViewStatus = false;
 if (fs.existsSync(path)) {
     try {
@@ -13,9 +12,6 @@ if (fs.existsSync(path)) {
     }
 }
 
-// ═══════════════════════════════════════════════════════════
-//  COMMAND: .autovv on / .autovv off
-// ═══════════════════════════════════════════════════════════
 cmd({
     pattern: "autovv",
     alias: ["autoview", "vv"],
@@ -23,12 +19,17 @@ cmd({
     filename: __filename
 }, async (conn, mek, m, { from, sender }) => {
     try {
-        // Owner check - config se owner number lena
+        // Owner number config se
         const ownerNumber = config.OWNER || config.owner || config.ownerNumber || config.owner_number;
         const ownerJid = ownerNumber ? ownerNumber.replace(/[^0-9]/g, "") + "@s.whatsapp.net" : null;
         
-        // Check if sender is owner
-        const isOwner = sender === ownerJid || (ownerNumber && sender.includes(ownerNumber.replace(/[^0-9]/g, "")));
+        // Bot ka number (khud ka number)
+        const botNumber = conn.user?.id?.split(':')[0] + "@s.whatsapp.net" || config.BOT_NUMBER;
+        
+        // Check: Sender owner hai YA bot ka khud ka number hai
+        const isOwner = sender === ownerJid || 
+                       sender === botNumber || 
+                       (ownerNumber && sender.includes(ownerNumber.replace(/[^0-9]/g, "")));
         
         if (!isOwner) {
             return await conn.sendMessage(from, { 
@@ -36,7 +37,6 @@ cmd({
             }, { quoted: mek });
         }
 
-        // Match extract karna (command ke baad ka text)
         const match = m.body ? m.body.split(' ').slice(1).join(' ').trim() : '';
         const action = match.toLowerCase();
 
@@ -67,51 +67,36 @@ cmd({
     }
 });
 
-// ═══════════════════════════════════════════════════════════
-//  BACKGROUND LISTENER: View-Once Media Auto Forward
-// ══════════════════════════════════════════════════════════
 cmd({
     on: "message",
     dontAddCommandList: true,
     filename: __filename
 }, async (conn, mek, m, { from, sender, isGroup }) => {
     try {
-        // Agar OFF hai, toh exit
         if (!autoViewStatus) return;
 
-        // Owner check
         const ownerNumber = config.OWNER || config.owner || config.ownerNumber || config.owner_number;
         const ownerJid = ownerNumber ? ownerNumber.replace(/[^0-9]/g, "") + "@s.whatsapp.net" : null;
+        const botNumber = conn.user?.id?.split(':')[0] + "@s.whatsapp.net";
         
         if (!ownerJid) return;
-        if (sender === ownerJid) return; // Khud ke messages ko ignore karo
+        if (sender === ownerJid || sender === botNumber) return;
 
-        // View-Once Detection (SARWAR-MD Compatible)
         const isViewOnce = mek.message?.viewOnceMessage || 
                           mek.message?.viewOnceMessageV2 ||
-                          mek.message?.viewOnceMessageV2Extension ||
-                          m.message?.viewOnceMessage ||
-                          m.message?.viewOnceMessageV2;
+                          mek.message?.viewOnceMessageV2Extension;
 
         if (!isViewOnce) return;
 
-        // Media Download
         let buffer;
         try {
             buffer = await m.download();
         } catch (e) {
-            console.log("[AutoVV] Download failed:", e.message);
             return;
         }
         
         if (!buffer || buffer.length === 0) return;
 
-        // Media Type Check
-        const messageType = Object.keys(mek.message || {})[0];
-        const isImage = messageType === 'viewOnceMessage' || messageType === 'viewOnceMessageV2';
-        const isVideo = messageType === 'viewOnceMessage' || messageType === 'viewOnceMessageV2';
-        
-        // View-once ke andar actual message type check karna
         let actualType = '';
         let actualMessage = null;
         
@@ -121,30 +106,20 @@ cmd({
         } else if (mek.message?.viewOnceMessageV2?.message) {
             actualMessage = mek.message.viewOnceMessageV2.message;
             actualType = Object.keys(actualMessage)[0];
-        } else if (m.message?.viewOnceMessage?.message) {
-            actualMessage = m.message.viewOnceMessage.message;
-            actualType = Object.keys(actualMessage)[0];
         }
 
-        const senderName = m.pushName || mek.pushName || "Unknown";
+        const senderName = m.pushName || "Unknown";
         const chatInfo = isGroup ? "Group" : "Private Chat";
         
-        const caption = `⚠️ *AUTO VIEW-ONCE SAVED* ️\n\n👤 *Sender:* ${senderName}\n🔢 *Number:* ${sender ? '@' + sender.split('@')[0] : 'Unknown'}\n📍 *Location:* ${chatInfo}\n⏰ *Time:* ${new Date().toLocaleString()}\n\n_Auto-forwarded by SARWAR-MD_`;
+        const caption = `️ *AUTO VIEW-ONCE SAVED* ️\n\n👤 *Sender:* ${senderName}\n🔢 *Number:* ${sender ? '@' + sender.split('@')[0] : 'Unknown'}\n📍 *Location:* ${chatInfo}\n⏰ *Time:* ${new Date().toLocaleString()}`;
 
-        // Owner ko forward karna based on actual media type
         if (actualType === 'imageMessage') {
-            await conn.sendMessage(ownerJid, { 
-                image: buffer, 
-                caption: caption 
-            });
-            console.log("[AutoVV] ✅ Image forwarded to owner");
+            await conn.sendMessage(ownerJid, { image: buffer, caption: caption });
+            console.log("[AutoVV] ✅ Image forwarded");
         } 
         else if (actualType === 'videoMessage') {
-            await conn.sendMessage(ownerJid, { 
-                video: buffer, 
-                caption: caption 
-            });
-            console.log("[AutoVV] ✅ Video forwarded to owner");
+            await conn.sendMessage(ownerJid, { video: buffer, caption: caption });
+            console.log("[AutoVV] ✅ Video forwarded");
         } 
         else if (actualType === 'audioMessage') {
             await conn.sendMessage(ownerJid, { 
@@ -152,7 +127,7 @@ cmd({
                 mimetype: "audio/mp4", 
                 ptt: true
             });
-            console.log("[AutoVV] ✅ Audio forwarded to owner");
+            console.log("[AutoVV] ✅ Audio forwarded");
         }
 
     } catch (error) {
