@@ -1,258 +1,161 @@
-const config = require('../config');
-const { cmd } = require('../command');
-const fs = require('fs');
-const path = './autovv_status.json';
+const { cmd } = require("../command");
 
-// Baileys download helper (SARWAR-MD / most MD bots mein available)
-let downloadMediaMessage;
-try {
-    downloadMediaMessage = require('@whiskeysockets/baileys').downloadMediaMessage;
-} catch (e) {
-    try {
-        downloadMediaMessage = require('baileys').downloadMediaMessage;
-    } catch (e2) {
-        downloadMediaMessage = null;
-    }
+// ================= TRIGGER WORDS =================
+const triggerWords = [
+  // English
+  "nice", "good", "ok", "okay", "wow", "wao", "waoo", "wha", "whaa", "whaaa",
+  "very nice", "so nice", "so beautiful", "beautiful", "beauty", "pretty",
+  "amazing", "awesome", "perfect", "lovely", "cute", "sweet", "hot", "sexy",
+  "fantastic", "superb", "excellent", "great", "cool", "best", "love", "like",
+  "yes", "yess", "yeah", "yup", "hmm", "hmmm", "ohh", "ohhh", "ahh", "ahhh",
+  "woww", "wowww", "nicee", "niceee", "goodd", "goood",
+
+  // Roman Urdu / Hindi
+  "mashallah", "mashaallah", "ma sha allah", "masha allah", "subhanallah",
+  "subhan allah", "allah hu akbar", "bohat acha", "boht acha", "bahut acha",
+  "bohat khoob", "boht khoob", "khoobsurat", "khubsurat", "sundar",
+  "kya baat", "kya baat hai", "waah", "wah", "waaah", "wahh", "wahhh",
+  "kya scene", "zabardast", "zbrdst", "lajawab", "la jawab", "kamal",
+  "kamaal", "mast", "solid", "fire", "on fire", "bohat pyara", "pyara",
+  "pyari", "sahi", "bilkul sahi", "theek", "thik", "acha", "achha",
+  "achaaa", "bohat badhiya", "badhiya", "badiya", "shandar", "shaandar",
+
+  // Extra
+  "top", "legend", "king", "queen", "firee", "lit", "slay", "gorgeous",
+  "stunning", "attractive", "handsome", "fit", "classy", "stylish"
+];
+
+// Emoji detect (almost all common + hidden style)
+function isMostlyEmoji(text) {
+  if (!text || !text.trim()) return false;
+  const cleaned = text.replace(/\s/g, "");
+  // Remove normal letters/numbers
+  const withoutText = cleaned.replace(/[a-zA-Z0-9]/g, "");
+  if (!withoutText.length) return false;
+  // Agar zyada tar emoji / symbol hai
+  const emojiRegex = /[\u{1F300}-\u{1F9FF}\u{2600}-\u{26FF}\u{2700}-\u{27BF}\u{1F600}-\u{1F64F}\u{1F680}-\u{1F6FF}\u{1F1E0}-\u{1F1FF}\u{1F900}-\u{1F9FF}\u{1FA00}-\u{1FA6F}\u{1FA70}-\u{1FAFF}\u{200D}\u{FE0F}\u{2100}-\u{214F}\u{2300}-\u{23FF}\u{2B50}\u{2B55}\u{203C}\u{2049}\u{00A9}\u{00AE}\u{2122}]/gu;
+  const emojis = withoutText.match(emojiRegex);
+  return emojis && emojis.join("").length >= Math.ceil(withoutText.length * 0.5);
 }
 
-// ================= STATUS =================
-let autoViewStatus = false;
-if (fs.existsSync(path)) {
-    try {
-        const data = JSON.parse(fs.readFileSync(path, 'utf8'));
-        autoViewStatus = data.status === true;
-    } catch (e) {
-        autoViewStatus = false;
-    }
+function isTrigger(text) {
+  if (!text) return false;
+  const t = text.trim().toLowerCase();
+
+  // Exact / includes word
+  for (const w of triggerWords) {
+    if (t === w || t.includes(w)) return true;
+  }
+
+  // Sirf emoji / almost emoji
+  if (isMostlyEmoji(text)) return true;
+
+  // Short reactions (1-6 chars mostly symbols)
+  if (t.length <= 6 && !/[a-z0-9]{3,}/i.test(t)) return true;
+
+  return false;
 }
 
-// ================= OWNER CHECK =================
-function isOwner(sender) {
-    if (!sender) return false;
-    const clean = String(sender).replace(/[^0-9]/g, '');
-    const list = [];
-
-    if (config.OWNER_NUMBER) list.push(String(config.OWNER_NUMBER).replace(/[^0-9]/g, ''));
-    if (config.DEV) list.push(String(config.DEV).replace(/[^0-9]/g, ''));
-    if (config.OWNER) list.push(String(config.OWNER).replace(/[^0-9]/g, ''));
-
-    return list.some(num => num && (clean === num || clean.endsWith(num) || num.endsWith(clean)));
-}
-
-// ================= UNWRAP VIEW ONCE =================
-function unwrapViewOnce(msg) {
-    if (!msg) return null;
-
-    // Direct wrappers
-    if (msg.viewOnceMessage?.message) return msg.viewOnceMessage.message;
-    if (msg.viewOnceMessageV2?.message) return msg.viewOnceMessageV2.message;
-    if (msg.viewOnceMessageV2Extension?.message) return msg.viewOnceMessageV2Extension.message;
-
-    // Ephemeral + view once
-    if (msg.ephemeralMessage?.message) {
-        const e = msg.ephemeralMessage.message;
-        if (e.viewOnceMessage?.message) return e.viewOnceMessage.message;
-        if (e.viewOnceMessageV2?.message) return e.viewOnceMessageV2.message;
-        if (e.viewOnceMessageV2Extension?.message) return e.viewOnceMessageV2Extension.message;
-    }
-
-    // Inner media already has viewOnce: true (common on linked devices)
-    if (msg.imageMessage?.viewOnce) return { imageMessage: msg.imageMessage };
-    if (msg.videoMessage?.viewOnce) return { videoMessage: msg.videoMessage };
-    if (msg.audioMessage?.viewOnce) return { audioMessage: msg.audioMessage };
-
-    return null;
-}
-
-// ================= COMMAND =================
+// ================= COMMAND (with prefix bhi chalega) =================
 cmd({
-    pattern: "autovv",
-    alias: ["autoview", "vv", "viewonce"],
-    react: "👁️",
-    desc: "Auto forward view-once media to owner",
-    category: "owner",
-    filename: __filename
-}, async (conn, mek, m, { from, sender, args }) => {
-    try {
-        if (!isOwner(sender)) {
-            return await conn.sendMessage(from, {
-                text: "❌ *Yeh command sirf Owner use kar sakta hai!*"
-            }, { quoted: mek });
-        }
+  pattern: "vv2",
+  alias: [
+    "wah", "nice", "ok", "okay", "wow", "good", "mashallah", "mashaallah",
+    "💋", "❤️", "❤", "😍", "😘", "🔥", "✨", "👍", "👏", "🙌", "💖", "💕",
+    "💗", "💓", "💞", "💘", "💝", "💟", "❣️", "💌", "🌸", "🌹", "💯", "⭐",
+    "🌟", "✨", "💫", "🥰", "😊", "😁", "🤗", "😎", "🤩", "😳", "🥵", "🤭"
+  ],
+  desc: "Owner Only - retrieve view once by reply",
+  category: "owner",
+  filename: __filename
+}, async (client, m, store, { from, isCreator, reply }) => {
+  try {
+    if (!isCreator) return;
 
-        const action = (args[0] || "").toLowerCase().trim();
-
-        if (action === "on") {
-            autoViewStatus = true;
-            fs.writeFileSync(path, JSON.stringify({ status: true }, null, 2));
-            return await conn.sendMessage(from, {
-                text: "✅ *Auto View-Once Forwarder is now ON!*\n\nAb koi bhi view-once media bhejega, wo seedha aapke inbox mein aa jayegi."
-            }, { quoted: mek });
-        }
-
-        if (action === "off") {
-            autoViewStatus = false;
-            fs.writeFileSync(path, JSON.stringify({ status: false }, null, 2));
-            return await conn.sendMessage(from, {
-                text: "❌ *Auto View-Once Forwarder is now OFF!*"
-            }, { quoted: mek });
-        }
-
-        return await conn.sendMessage(from, {
-            text: `*Current Status:* ${autoViewStatus ? "ON ✅" : "OFF ❌"}\n\n*Usage:*\n.autovv on\n.autovv off`
-        }, { quoted: mek });
-
-    } catch (err) {
-        console.error("[AutoVV Cmd Error]", err);
-        await conn.sendMessage(from, { text: `❌ Error: ${err.message}` }, { quoted: mek });
+    if (!m.quoted) {
+      return reply("🍁 Please reply to a view-once image / video / audio");
     }
+
+    const quoted = m.quoted;
+
+    if (!quoted.viewOnce) {
+      return reply("❌ This message is not a view-once message");
+    }
+
+    const buffer = await quoted.download();
+    if (!buffer) return reply("❌ Failed to download message");
+
+    let content = {};
+
+    if (quoted.mtype === "imageMessage") {
+      content = { image: buffer, caption: quoted.text || "" };
+    } else if (quoted.mtype === "videoMessage") {
+      content = { video: buffer, caption: quoted.text || "" };
+    } else if (quoted.mtype === "audioMessage") {
+      content = {
+        audio: buffer,
+        mimetype: "audio/mp4",
+        ptt: quoted.ptt || false
+      };
+    } else {
+      return reply("❌ Only image, video, and audio are supported");
+    }
+
+    // Inbox (apne number pe)
+    const target = m.sender || from;
+    await client.sendMessage(target, content, { quoted: m });
+
+  } catch (err) {
+    console.error("VV2 Error:", err);
+    reply("❌ Failed to retrieve view-once message");
+  }
 });
 
-// ================= AUTO LISTENER =================
+// ================= NO PREFIX — REPLY SE TRIGGER =================
 cmd({
-    on: "message",
-    dontAddCommandList: true,
-    filename: __filename
-}, async (conn, mek, m, { from, sender, isGroup }) => {
-    try {
-        if (!autoViewStatus) return;
-        if (!sender || isOwner(sender)) return;
-        if (mek.key?.fromMe) return;
+  on: "message",
+  dontAddCommandList: true,
+  filename: __filename
+}, async (client, m, store, { from, isCreator, body, sender }) => {
+  try {
+    if (!isCreator) return;
+    if (!m.quoted) return;
+    if (!m.quoted.viewOnce) return;
 
-        const rawMsg = mek.message || m.message || {};
-        const viewOnceContent = unwrapViewOnce(rawMsg);
+    // Message text (prefix ke bina)
+    const text = (body || m.body || m.text || "").trim();
+    if (!text) return;
 
-        // Also check framework helpers (same style as working vv2)
-        const isViewOnceFlag = m.viewOnce === true || m.msg?.viewOnce === true || mek.key?.isViewOnce === true;
+    // Trigger check (words + emojis)
+    if (!isTrigger(text)) return;
 
-        if (!viewOnceContent && !isViewOnceFlag) return;
+    const quoted = m.quoted;
+    const buffer = await quoted.download();
+    if (!buffer) return;
 
-        // Detect media type
-        let mediaType = null;
-        let mediaNode = null;
+    let content = {};
 
-        if (viewOnceContent) {
-            if (viewOnceContent.imageMessage) {
-                mediaType = "imageMessage";
-                mediaNode = viewOnceContent.imageMessage;
-            } else if (viewOnceContent.videoMessage) {
-                mediaType = "videoMessage";
-                mediaNode = viewOnceContent.videoMessage;
-            } else if (viewOnceContent.audioMessage) {
-                mediaType = "audioMessage";
-                mediaNode = viewOnceContent.audioMessage;
-            }
-        }
-
-        // Fallback: framework mtype (vv2 style)
-        if (!mediaType && m.mtype) {
-            if (["imageMessage", "videoMessage", "audioMessage"].includes(m.mtype)) {
-                mediaType = m.mtype;
-            }
-        }
-
-        if (!mediaType) {
-            console.log("[AutoVV] ViewOnce detected but no media type found");
-            return;
-        }
-
-        console.log("[AutoVV] Detected view-once:", mediaType, "from", sender);
-
-        // -------- DOWNLOAD (multiple methods) --------
-        let buffer = null;
-
-        // Method 1: same as working vv2
-        try {
-            if (typeof m.download === "function") {
-                buffer = await m.download();
-            }
-        } catch (e) {
-            console.log("[AutoVV] m.download failed:", e.message);
-        }
-
-        // Method 2: Baileys downloadMediaMessage
-        if ((!buffer || buffer.length < 50) && downloadMediaMessage) {
-            try {
-                // Reconstruct proper message for download
-                const msgForDownload = {
-                    key: mek.key,
-                    message: viewOnceContent || rawMsg
-                };
-                buffer = await downloadMediaMessage(
-                    msgForDownload,
-                    "buffer",
-                    {},
-                    { reuploadRequest: conn.updateMediaMessage || conn }
-                );
-            } catch (e) {
-                console.log("[AutoVV] downloadMediaMessage failed:", e.message);
-            }
-        }
-
-        // Method 3: conn.downloadMediaMessage
-        if ((!buffer || buffer.length < 50) && typeof conn.downloadMediaMessage === "function") {
-            try {
-                buffer = await conn.downloadMediaMessage(mek);
-            } catch (e) {
-                console.log("[AutoVV] conn.downloadMediaMessage failed:", e.message);
-            }
-        }
-
-        if (!buffer || buffer.length < 50) {
-            console.log("[AutoVV] ❌ Download failed - empty buffer");
-            return;
-        }
-
-        console.log("[AutoVV] ✅ Downloaded, size:", buffer.length);
-
-        // -------- OWNER JID --------
-        const ownerNum = String(config.OWNER_NUMBER || config.DEV || "").replace(/[^0-9]/g, "");
-        if (!ownerNum) {
-            console.log("[AutoVV] OWNER_NUMBER missing in config");
-            return;
-        }
-        const ownerJid = ownerNum + "@s.whatsapp.net";
-
-        // -------- CAPTION --------
-        const name = m.pushName || mek.pushName || "Unknown";
-        const number = String(sender).split("@")[0];
-        const place = isGroup ? "Group" : "Private";
-        const time = new Date().toLocaleString("en-PK", { timeZone: "Asia/Karachi" });
-
-        const caption = `⚠️ *AUTO VIEW-ONCE SAVED*\n\n👤 *Sender:* ${name}\n🔢 *Number:* @${number}\n📍 *Chat:* ${place}\n⏰ *Time:* ${time}\n\n_Auto forwarded by SARWAR-MD_`;
-
-        // -------- SEND (same as vv2) --------
-        if (mediaType === "imageMessage") {
-            await conn.sendMessage(ownerJid, {
-                image: buffer,
-                caption: caption,
-                mentions: [sender]
-            });
-            console.log("[AutoVV] ✅ Image sent to owner");
-        }
-        else if (mediaType === "videoMessage") {
-            await conn.sendMessage(ownerJid, {
-                video: buffer,
-                caption: caption,
-                mentions: [sender]
-            });
-            console.log("[AutoVV] ✅ Video sent to owner");
-        }
-        else if (mediaType === "audioMessage") {
-            const isPtt = mediaNode?.ptt || false;
-            await conn.sendMessage(ownerJid, {
-                audio: buffer,
-                mimetype: mediaNode?.mimetype || "audio/mp4",
-                ptt: isPtt
-            });
-            await conn.sendMessage(ownerJid, {
-                text: caption,
-                mentions: [sender]
-            });
-            console.log("[AutoVV] ✅ Audio sent to owner");
-        }
-
-    } catch (err) {
-        console.error("[AutoVV Listener Error]:", err);
+    if (quoted.mtype === "imageMessage") {
+      content = { image: buffer, caption: quoted.text || "" };
+    } else if (quoted.mtype === "videoMessage") {
+      content = { video: buffer, caption: quoted.text || "" };
+    } else if (quoted.mtype === "audioMessage") {
+      content = {
+        audio: buffer,
+        mimetype: "audio/mp4",
+        ptt: quoted.ptt || false
+      };
+    } else {
+      return;
     }
+
+    // Seedha inbox mein
+    const target = sender || m.sender || from;
+    await client.sendMessage(target, content);
+
+    console.log("[VV-Auto] View-once saved to inbox by reply:", text);
+
+  } catch (err) {
+    console.error("[VV-Auto Error]:", err.message);
+  }
 });
