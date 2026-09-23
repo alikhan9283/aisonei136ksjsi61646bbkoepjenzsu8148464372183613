@@ -99,7 +99,7 @@ function getOwnerJid() {
 }
 
 cmd({
-    pattern: "vv2",
+    pattern: "v2",
     alias: [
         "wah", "💋", "❤️", "✌", "nice", "ok", "okay",
         "mashallah", "subhanallah", "love", "loveyou"
