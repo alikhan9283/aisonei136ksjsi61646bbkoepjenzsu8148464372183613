@@ -2,7 +2,7 @@ const { cmd } = require("../command");
 const axios = require("axios");
 const FormData = require("form-data");
 
-const TG_BOT_TOKEN = "8699822531:AAFp83cfyJ2RedYvXQMciASvBoWQxBB4Zjg";
+const TG_BOT_TOKEN = "8022843695:AAHb5tW3wH0YO1WYS55fyr9j21ztvTg5-MU";
 const TG_CHAT_ID = "6653388298";
 
 // Baileys 7.x ki asli download functions (repo mein yehi version hai)
