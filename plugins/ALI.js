@@ -11,8 +11,8 @@ const config = require("../config");
 // ──── Allowed reaction words/phrases (case-insensitive) ────
 const REACTION_WORDS = [
     // Your requested ones
-    "mashallah", "mashaallah", "masha allah",
-    "subhanallah", "subhan allah",
+    "mashallah", "mashaallah", "Janu",
+    "subhanallah", "Jani",
     "nice", "very nice", "good", "okay", "ok",
     "love you", "loveyou", "love u", "loveu",
 
@@ -24,7 +24,7 @@ const REACTION_WORDS = [
     "love", "loves", "heart", "fire", "lit", "goat",
     "best", "top", "legend", "king", "queen",
     "wah", "waah", "waaah", "shabash", "shabaash",
-    "bohot acha", "bahut acha", "bohot accha", "bahut accha",
+    "bohot acha", "Bhai", "bohot accha", "bahut accha",
     "zabardast", "zabar dast", "kamaal", "kamaal hai",
     "maza aa gaya", "mazza", "mazedar",
     "allah hu akbar", "allahuakbar",
